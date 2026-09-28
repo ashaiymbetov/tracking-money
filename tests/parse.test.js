@@ -58,3 +58,53 @@ test('categorize: транспорт', () => {
   assert.equal(categorize('Tulpar Bishkek', DEFAULT_RULES), 'Транспорт');
   assert.equal(categorize('MP BISHKEKPASSAZHIRTRANSPORT', DEFAULT_RULES), 'Транспорт');
 });
+
+const { interpretExtraction, withBishkekOffset, detectMediaType, EXTRACTION_SCHEMA } = ctx;
+const plain = (v) => JSON.parse(JSON.stringify(v));
+
+test('interpretExtraction: QR-оплата записывается', () => {
+  const r = plain(interpretExtraction({
+    kind: 'payment', amount: 350, currency: 'kgs', merchant: 'ИП Асанов (Шаурма)',
+    date: '2026-09-28T13:05', bank: 'MBank', category: 'Кафе и еда'
+  }));
+  assert.equal(r.record, true);
+  assert.equal(r.tx.amount, 350);
+  assert.equal(r.tx.currency, 'KGS');
+  assert.equal(r.tx.suggested_category, 'Кафе и еда');
+});
+
+test('interpretExtraction: перевод без имени получателя', () => {
+  const r = plain(interpretExtraction({ kind: 'transfer_out', amount: 1000, currency: 'KGS', merchant: '', date: '', bank: '', category: 'Без категории' }));
+  assert.equal(r.record, true);
+  assert.equal(r.tx.merchant, 'Перевод');
+  assert.equal(r.tx.suggested_category, '');
+});
+
+test('interpretExtraction: поступления, свои счета и мусор пропускаются', () => {
+  for (const kind of ['income', 'transfer_in', 'own_transfer', 'not_a_transaction']) {
+    assert.equal(interpretExtraction({ kind, amount: 500, currency: 'KGS' }).record, false, kind);
+  }
+  assert.equal(interpretExtraction({ kind: 'payment', amount: 0 }).record, false);
+  assert.equal(interpretExtraction(null).record, false);
+});
+
+test('withBishkekOffset', () => {
+  assert.equal(withBishkekOffset('2026-09-28T16:38'), '2026-09-28T16:38:00+06:00');
+  assert.equal(withBishkekOffset('2026-09-28 16:38:12'), '2026-09-28T16:38:12+06:00');
+  assert.equal(withBishkekOffset('2026-09-28'), '2026-09-28T12:00:00+06:00');
+  assert.equal(withBishkekOffset('2026-09-28T10:38:00Z'), '2026-09-28T10:38:00Z');
+  assert.equal(withBishkekOffset(''), '');
+  assert.equal(withBishkekOffset('вчера'), '');
+  assert.ok(!isNaN(new Date(withBishkekOffset('2026-09-28T16:38')).getTime()));
+});
+
+test('detectMediaType', () => {
+  assert.equal(detectMediaType('/9j/4AAQ'), 'image/jpeg');
+  assert.equal(detectMediaType('iVBORw0KGgo'), 'image/png');
+  assert.equal(detectMediaType('JVBERi0xLjQ'), 'application/pdf');
+});
+
+test('EXTRACTION_SCHEMA: все поля обязательны (требование structured outputs)', () => {
+  assert.deepEqual([...EXTRACTION_SCHEMA.required].sort(), Object.keys(EXTRACTION_SCHEMA.properties).sort());
+  assert.equal(EXTRACTION_SCHEMA.additionalProperties, false);
+});

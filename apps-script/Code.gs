@@ -84,6 +84,14 @@ function doPost(e) {
       return json_({ ok: false, error: 'bad token' });
     }
 
+    // Скриншот / чек: сначала распознаём через Claude (вне блокировки — это пара секунд).
+    if (body.image) {
+      var extracted = extractFromImage_(body.image, body.mime, loadCategories_(getSpreadsheet_()));
+      var decision = interpretExtraction(extracted);
+      if (!decision.record) return json_({ ok: true, skipped: true, message: decision.message });
+      body = mergeExtraction_(body, decision.tx);
+    }
+
     var lock = LockService.getScriptLock();
     lock.waitLock(10000);
     try {
@@ -128,6 +136,8 @@ function addTransaction_(body) {
   if (isNaN(date.getTime())) date = new Date();
 
   var category = cleanText(body.category) || categorize(merchant, loadRules_(ss));
+  // Правила важнее; подсказка ИИ — только если правила не знают этот магазин.
+  if (category === UNCATEGORIZED && cleanText(body.suggested_category)) category = cleanText(body.suggested_category);
 
   if (isDuplicate_(sheet, date, parsed.amount, merchant)) {
     return { ok: true, duplicate: true, category: category, message: 'Уже записано' };
@@ -159,9 +169,167 @@ function isDuplicate_(sheet, date, amount, merchant) {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Скриншоты и чеки → Claude
+// ---------------------------------------------------------------------------
+
+var CLAUDE_MODEL = 'claude-opus-5';
+var TX_KINDS = ['payment', 'transfer_out', 'income', 'transfer_in', 'own_transfer', 'not_a_transaction'];
+
+var EXTRACTION_SCHEMA = {
+  type: 'object',
+  properties: {
+    kind: { type: 'string', enum: TX_KINDS },
+    amount: { type: 'number' },
+    currency: { type: 'string' },
+    merchant: { type: 'string' },
+    date: { type: 'string' },
+    bank: { type: 'string' },
+    category: { type: 'string' }
+  },
+  required: ['kind', 'amount', 'currency', 'merchant', 'date', 'bank', 'category'],
+  additionalProperties: false
+};
+
+function extractionPrompt_(categories) {
+  return [
+    'Это скриншот или чек из мобильного банка в Кыргызстане (MBank, O!Bank, Simbank и т. п.).',
+    'Извлеки одну операцию:',
+    '- kind: payment — оплата покупки/услуги (в т. ч. по QR); transfer_out — перевод другому человеку;',
+    '  income — зачисление/поступление; transfer_in — входящий перевод; own_transfer — перевод между своими счетами;',
+    '  not_a_transaction — на изображении нет завершённой операции (ошибка, баланс, реклама и т. п.).',
+    '- amount: сумма операции положительным числом (без комиссии, если она указана отдельно); 0, если нет.',
+    '- currency: ISO-код (KGS, USD, RUB…); «сом» = KGS.',
+    '- merchant: получатель — название магазина/ИП/сервиса, либо имя человека для перевода. Без номера телефона и счёта.',
+    '- date: дата и время операции в формате YYYY-MM-DDTHH:MM (по Бишкеку), пустая строка, если не видно.',
+    '- bank: банк или приложение, если понятно, иначе пустая строка.',
+    '- category: одна из: ' + categories.join(', ') + '. Если ни одна не подходит — «' + UNCATEGORIZED + '».'
+  ].join('\n');
+}
+
+/** Отправляет изображение (или PDF) в Claude и возвращает распознанный объект по EXTRACTION_SCHEMA. */
+function extractFromImage_(base64, mime, categories) {
+  var apiKey = PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY');
+  if (!apiKey) throw new Error('Не задан ANTHROPIC_API_KEY в свойствах скрипта');
+
+  var data = String(base64).replace(/^data:[^,]+,/, '').replace(/\s/g, '');
+  var mediaType = cleanText(mime) || detectMediaType(data);
+  var fileBlock = mediaType === 'application/pdf'
+    ? { type: 'document', source: { type: 'base64', media_type: mediaType, data: data } }
+    : { type: 'image', source: { type: 'base64', media_type: mediaType, data: data } };
+
+  var payload = {
+    model: CLAUDE_MODEL,
+    max_tokens: 4000,
+    fallbacks: 'default',
+    output_config: { effort: 'low', format: { type: 'json_schema', schema: EXTRACTION_SCHEMA } },
+    messages: [{ role: 'user', content: [fileBlock, { type: 'text', text: extractionPrompt_(categories) }] }]
+  };
+
+  var res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-beta': 'server-side-fallback-2026-07-01'
+    },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  });
+
+  var code = res.getResponseCode();
+  var body = JSON.parse(res.getContentText());
+  if (code !== 200) {
+    throw new Error('Claude API ' + code + ': ' + (body.error && body.error.message || res.getContentText()));
+  }
+  if (body.stop_reason === 'refusal') throw new Error('Claude отказался обрабатывать изображение');
+  if (body.stop_reason === 'max_tokens') throw new Error('Ответ Claude обрезан (max_tokens)');
+
+  for (var i = 0; i < body.content.length; i++) {
+    if (body.content[i].type === 'text') return JSON.parse(body.content[i].text);
+  }
+  throw new Error('Claude не вернул текстовый ответ');
+}
+
+/** Решает, записывать ли распознанную операцию как расход. Чистая функция. */
+function interpretExtraction(x) {
+  x = x || {};
+  var amount = Number(x.amount);
+  if (x.kind === 'not_a_transaction' || !(amount > 0)) {
+    return { record: false, message: 'Не нашёл на картинке операцию' };
+  }
+  if (x.kind === 'income' || x.kind === 'transfer_in') {
+    return { record: false, message: 'Это поступление (' + formatAmount_(amount) + ' ' + (x.currency || DEFAULT_CURRENCY) + '), не записал как расход' };
+  }
+  if (x.kind === 'own_transfer') {
+    return { record: false, message: 'Перевод между своими счетами — не расход, пропустил' };
+  }
+  var suggested = cleanText(x.category);
+  return {
+    record: true,
+    tx: {
+      amount: amount,
+      currency: cleanText(x.currency).toUpperCase() || DEFAULT_CURRENCY,
+      merchant: cleanText(x.merchant) || (x.kind === 'transfer_out' ? 'Перевод' : 'Неизвестно'),
+      date: cleanText(x.date),
+      bank: cleanText(x.bank),
+      kind: x.kind,
+      suggested_category: suggested === UNCATEGORIZED ? '' : suggested
+    }
+  };
+}
+
+function mergeExtraction_(body, tx) {
+  return {
+    amount: tx.amount,
+    currency: tx.currency,
+    merchant: tx.merchant,
+    date: withBishkekOffset(tx.date),
+    card: cleanText(body.card) || tx.bank,
+    category: cleanText(body.category),
+    suggested_category: tx.suggested_category,
+    source: cleanText(body.source) || 'screenshot',
+    kind: tx.kind
+  };
+}
+
+/** "2026-09-28T16:38" → "2026-09-28T16:38:00+06:00"; невалидное → "" (тогда берётся текущее время). */
+function withBishkekOffset(value) {
+  var s = cleanText(value);
+  var m = s.match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if (!m) return '';
+  var tz = s.match(/([zZ]|[+-]\d{2}:?\d{2})$/);
+  return m[1] + 'T' + (m[2] || '12') + ':' + (m[3] || '00') + ':' + (m[4] || '00') + (tz ? tz[1] : '+06:00');
+}
+
+/** Определяет тип файла по первым байтам base64. */
+function detectMediaType(base64) {
+  var head = String(base64).slice(0, 12);
+  if (head.indexOf('/9j/') === 0) return 'image/jpeg';
+  if (head.indexOf('iVBOR') === 0) return 'image/png';
+  if (head.indexOf('R0lGOD') === 0) return 'image/gif';
+  if (head.indexOf('UklGR') === 0) return 'image/webp';
+  if (head.indexOf('JVBER') === 0) return 'application/pdf';
+  return 'image/jpeg';
+}
+
+function loadCategories_(ss) {
+  var seen = {};
+  var list = [];
+  loadRules_(ss).forEach(function (r) {
+    var c = cleanText(r[1]);
+    if (c && !seen[c]) { seen[c] = true; list.push(c); }
+  });
+  ['Транспорт', 'Переводы', 'Коммуналка', 'Одежда', 'Дом', 'Другое'].forEach(function (c) {
+    if (!seen[c]) { seen[c] = true; list.push(c); }
+  });
+  return list;
+}
+
 function stripToken_(body) {
   var copy = {};
-  for (var k in body) if (k !== 'token') copy[k] = body[k];
+  for (var k in body) if (k !== 'token' && k !== 'image') copy[k] = body[k];
   return copy;
 }
 
