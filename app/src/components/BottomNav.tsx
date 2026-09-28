@@ -11,35 +11,48 @@ const TABS: { id: Tab; label: string; Icon: typeof House }[] = [
   { id: 'budgets', label: 'Бюджеты', Icon: Target }
 ];
 
+// Пружина с лёгким перелётом — индикатор «перетекает» между вкладками, как в iOS 26.
+const liquid = { type: 'spring', stiffness: 480, damping: 32, mass: 0.9 } as const;
+
+/** Плавающий таб-бар в стиле Liquid Glass: капсула с вкладками + отдельная круглая кнопка «+». */
 export function BottomNav({ tab, onTab, onAdd }: { tab: Tab; onTab: (t: Tab) => void; onAdd: () => void }) {
-  const item = (t: (typeof TABS)[number]) => (
-    <button
-      key={t.id}
-      onClick={() => onTab(t.id)}
-      className={clsx('relative flex flex-1 flex-col items-center gap-0.5 py-1.5 text-[11px] font-medium transition-colors',
-        tab === t.id ? 'text-accent' : 'text-ink-3')}
-      aria-current={tab === t.id ? 'page' : undefined}
-    >
-      {tab === t.id && (
-        <motion.span layoutId="nav-pill" transition={{ type: 'spring', stiffness: 520, damping: 38 }}
-          className="absolute inset-x-3 inset-y-0 -z-10 rounded-2xl bg-accent-soft/60" />
-      )}
-      <t.Icon size={22} strokeWidth={tab === t.id ? 2.4 : 2} />
-      {t.label}
-    </button>
-  );
   return (
-    <nav className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/90 backdrop-blur-lg backdrop-saturate-150 [transform:translateZ(0)]">
-      <div className="mx-auto flex max-w-lg items-center px-2 pt-1.5">
-        {TABS.slice(0, 2).map(item)}
-        <button
+    <nav
+      className="pointer-events-none fixed inset-x-0 bottom-0 z-30 px-3"
+      style={{ paddingBottom: 'max(calc(env(safe-area-inset-bottom) - 10px), 10px)' }}
+    >
+      <div className="mx-auto flex max-w-lg items-center gap-2.5">
+        <div className="glass pointer-events-auto flex h-[62px] flex-1 items-center rounded-full p-1">
+          {TABS.map(t => {
+            const active = tab === t.id;
+            return (
+              <motion.button
+                key={t.id}
+                onClick={() => onTab(t.id)}
+                whileTap={{ scale: 0.9 }}
+                transition={liquid}
+                aria-current={active ? 'page' : undefined}
+                className={clsx(
+                  'relative flex h-full flex-1 flex-col items-center justify-center gap-0.5 rounded-full text-[10.5px] font-semibold transition-colors duration-200',
+                  active ? 'text-accent' : 'text-ink'
+                )}
+              >
+                {active && <motion.span layoutId="glass-tab" transition={liquid} className="glass-pill absolute inset-0 -z-10 rounded-full" />}
+                <t.Icon size={23} strokeWidth={active ? 2.5 : 2.1} />
+                <span className="leading-none">{t.label}</span>
+              </motion.button>
+            );
+          })}
+        </div>
+        <motion.button
           onClick={onAdd}
-          className="mx-1 flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-accent text-white shadow-lg shadow-accent/30 active:scale-95 transition"
+          whileTap={{ scale: 0.88 }}
+          transition={liquid}
           aria-label="Добавить расход"
+          className="glass pointer-events-auto flex h-[62px] w-[62px] shrink-0 items-center justify-center rounded-full text-accent"
         >
-          <Plus size={26} strokeWidth={2.4} />
-        </button>
-        {TABS.slice(2).map(item)}
+          <Plus size={28} strokeWidth={2.6} />
+        </motion.button>
       </div>
     </nav>
   );
