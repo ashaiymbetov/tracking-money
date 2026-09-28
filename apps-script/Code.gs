@@ -81,7 +81,7 @@ function doPost(e) {
     var body = parseBody_(e);
     var props = PropertiesService.getScriptProperties();
     if (body.token !== props.getProperty('TOKEN')) {
-      return json_({ ok: false, error: 'bad token' });
+      return fail_('неверный токен (проверь поле token в команде)');
     }
 
     // Скриншот / чек: сначала распознаём через Claude (вне блокировки — это пара секунд).
@@ -101,7 +101,7 @@ function doPost(e) {
       lock.releaseLock();
     }
   } catch (err) {
-    return json_({ ok: false, error: String(err) });
+    return fail_(String(err && err.message || err));
   }
 }
 
@@ -126,7 +126,7 @@ function addTransaction_(body) {
 
   var parsed = parseAmount(body.amount);
   if (parsed.amount === null) {
-    return { ok: false, error: 'не удалось распознать сумму: ' + body.amount };
+    return { ok: false, error: 'не удалось распознать сумму: ' + body.amount, message: '⚠️ Не удалось распознать сумму: ' + body.amount };
   }
   var currency = cleanText(body.currency) || parsed.currency || DEFAULT_CURRENCY;
   var merchant = normalizeMerchant(body.merchant);
@@ -331,6 +331,12 @@ function stripToken_(body) {
   var copy = {};
   for (var k in body) if (k !== 'token' && k !== 'image') copy[k] = body[k];
   return copy;
+}
+
+/** Ошибка с полем message, чтобы её показало уведомление в Команде; видна и в «Выполнениях» Apps Script. */
+function fail_(text) {
+  console.error(text);
+  return json_({ ok: false, error: text, message: '⚠️ ' + text });
 }
 
 function json_(obj) {
