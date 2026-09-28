@@ -9,6 +9,7 @@
  *   4. В iPhone настрой автоматизацию «Транзакция», которая шлёт POST на этот URL.
  */
 
+var SCRIPT_VERSION = '2026-09-28-app';  // видно по GET-запросу на URL скрипта — так проверяем, что развёрнута свежая версия
 var SHEET_TX = 'Транзакции';
 var SHEET_RULES = 'Правила';
 var SHEET_SUMMARY = 'Сводка';
@@ -123,7 +124,7 @@ function doGet(e) {
       return fail_(String(err && err.message || err));
     }
   }
-  return json_({ ok: true, message: 'Трекер расходов работает. Используй POST.' });
+  return json_({ ok: true, version: SCRIPT_VERSION, message: 'Трекер расходов работает (версия ' + SCRIPT_VERSION + '). Используй POST.' });
 }
 
 // ---------------------------------------------------------------------------
