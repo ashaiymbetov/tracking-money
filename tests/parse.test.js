@@ -108,3 +108,7 @@ test('EXTRACTION_SCHEMA: все поля обязательны (требова�
   assert.deepEqual([...EXTRACTION_SCHEMA.required].sort(), Object.keys(EXTRACTION_SCHEMA.properties).sort());
   assert.equal(EXTRACTION_SCHEMA.additionalProperties, false);
 });
+
+test('categorize: Tulpar-Card (оплата в автобусе)', () => {
+  assert.equal(categorize(normalizeMerchant('Tulpar-Card  Bishkek, Bishkek'), DEFAULT_RULES), 'Транспорт');
+});
