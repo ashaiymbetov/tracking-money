@@ -1,0 +1,8 @@
+{
+  "name": "tracking-money",
+  "private": true,
+  "description": "Трекер расходов: Apple Pay (Команды iOS) → Google Sheets",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  }
+}
