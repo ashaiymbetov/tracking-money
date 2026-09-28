@@ -115,7 +115,8 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
   const minMonth = shiftMonth(now, -12);
 
   return (
-    <div className="fixed inset-0 mx-auto flex max-w-lg flex-col">
+    // Высота — из --app-h (см. lib/viewport.ts), а не inset-0: в iOS 26 у PWA «окно» бывает ниже экрана.
+    <div className="fixed inset-x-0 top-0 mx-auto flex max-w-lg flex-col" style={{ height: 'var(--app-h, 100dvh)' }}>
       <header className={clsx('pt-safe relative z-20 shrink-0 bg-bg px-4 pb-2 transition-shadow duration-200',
         scrolled && 'shadow-[0_1px_0_var(--line)]')}>
         <div className="flex items-center justify-between pt-1">

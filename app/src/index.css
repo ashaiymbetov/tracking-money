@@ -89,6 +89,7 @@
 }
 
 html, body, #root { height: 100%; }
+html { background: var(--bg); } /* если iOS всё же покажет щель у края — она будет цвета фона, а не чёрной */
 body {
   background: var(--bg);
   color: var(--ink);
