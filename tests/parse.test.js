@@ -112,3 +112,25 @@ test('EXTRACTION_SCHEMA: все поля обязательны (требова�
 test('categorize: Tulpar-Card (оплата в автобусе)', () => {
   assert.equal(categorize(normalizeMerchant('Tulpar-Card  Bishkek, Bishkek'), DEFAULT_RULES), 'Транспорт');
 });
+
+test('interpretExtraction: QR-оплата человеку на мелкую сумму = проезд в маршрутке', () => {
+  const base = { kind: 'transfer_out', amount: 45, currency: 'KGS', merchant: 'Алтынбек А.', date: '', bank: 'MBank', category: 'Переводы' };
+  assert.equal(interpretExtraction({ ...base, method: 'qr', recipient: 'person' }, 50).tx.suggested_category, 'Транспорт');
+  // перевод по номеру — не проезд
+  assert.equal(interpretExtraction({ ...base, method: 'phone_transfer', recipient: 'person' }, 50).tx.suggested_category, 'Переводы');
+  // дороже порога — не проезд
+  assert.equal(interpretExtraction({ ...base, amount: 300, method: 'qr', recipient: 'person' }, 50).tx.suggested_category, 'Переводы');
+  // QR магазину — категория от Claude
+  assert.equal(interpretExtraction({ ...base, category: 'Продукты', method: 'qr', recipient: 'business' }, 50).tx.suggested_category, 'Продукты');
+  // порог по умолчанию — 50
+  assert.equal(interpretExtraction({ ...base, method: 'qr', recipient: 'person' }).tx.suggested_category, 'Транспорт');
+});
+
+test('interpretExtraction: перевод себе пропускается', () => {
+  assert.equal(interpretExtraction({ kind: 'transfer_out', method: 'phone_transfer', recipient: 'self', amount: 5000 }).record, false);
+});
+
+test('categorize: имя из «Правил» работает и для кириллицы', () => {
+  const rules = [['алтынбек', 'Не учитывать']];
+  assert.equal(categorize('Алтынбек А.', rules), 'Не учитывать');
+});

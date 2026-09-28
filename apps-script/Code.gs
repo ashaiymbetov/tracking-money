@@ -13,6 +13,10 @@ var SHEET_TX = 'Транзакции';
 var SHEET_RULES = 'Правила';
 var SHEET_SUMMARY = 'Сводка';
 var UNCATEGORIZED = 'Без категории';
+var EXCLUDED = 'Не учитывать';        // строка остаётся в таблице, но не попадает в сводку
+var TRANSPORT = 'Транспорт';
+var SHEET_SETTINGS = 'Настройки';
+var DEFAULT_FARE_MAX = 50;            // QR-оплата человеку до этой суммы = проезд в маршрутке
 var TIMEZONE = 'Asia/Bishkek';
 var DEFAULT_CURRENCY = 'KGS';
 var DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
@@ -87,7 +91,7 @@ function doPost(e) {
     // Скриншот / чек: сначала распознаём через Claude (вне блокировки — это пара секунд).
     if (body.image) {
       var extracted = extractFromImage_(body.image, body.mime, loadCategories_(getSpreadsheet_()));
-      var decision = interpretExtraction(extracted);
+      var decision = interpretExtraction(extracted, loadSettings_(getSpreadsheet_()).fareMax);
       if (!decision.record) return json_({ ok: true, skipped: true, message: decision.message });
       body = mergeExtraction_(body, decision.tx);
     }
@@ -175,11 +179,15 @@ function isDuplicate_(sheet, date, amount, merchant) {
 
 var CLAUDE_MODEL = 'claude-opus-5';
 var TX_KINDS = ['payment', 'transfer_out', 'income', 'transfer_in', 'own_transfer', 'not_a_transaction'];
+var TX_METHODS = ['qr', 'phone_transfer', 'card', 'other'];
+var RECIPIENTS = ['business', 'person', 'self', 'unknown'];
 
 var EXTRACTION_SCHEMA = {
   type: 'object',
   properties: {
     kind: { type: 'string', enum: TX_KINDS },
+    method: { type: 'string', enum: TX_METHODS },
+    recipient: { type: 'string', enum: RECIPIENTS },
     amount: { type: 'number' },
     currency: { type: 'string' },
     merchant: { type: 'string' },
@@ -187,7 +195,7 @@ var EXTRACTION_SCHEMA = {
     bank: { type: 'string' },
     category: { type: 'string' }
   },
-  required: ['kind', 'amount', 'currency', 'merchant', 'date', 'bank', 'category'],
+  required: ['kind', 'method', 'recipient', 'amount', 'currency', 'merchant', 'date', 'bank', 'category'],
   additionalProperties: false
 };
 
@@ -198,6 +206,10 @@ function extractionPrompt_(categories) {
     '- kind: payment — оплата покупки/услуги (в т. ч. по QR); transfer_out — перевод другому человеку;',
     '  income — зачисление/поступление; transfer_in — входящий перевод; own_transfer — перевод между своими счетами;',
     '  not_a_transaction — на изображении нет завершённой операции (ошибка, баланс, реклама и т. п.).',
+    '- method: qr — оплата/перевод по QR-коду (на чеке есть «QR», «по QR», «ELQR» и т. п.); phone_transfer — перевод',
+    '  по номеру телефона или карты; card — оплата картой; other — иное или непонятно.',
+    '- recipient: business — магазин, компания, ИП с названием; person — частное лицо (имя и фамилия, «Алтынбек А.»);',
+    '  self — сам владелец счёта (перевод себе); unknown — непонятно.',
     '- amount: сумма операции положительным числом (без комиссии, если она указана отдельно); 0, если нет.',
     '- currency: ISO-код (KGS, USD, RUB…); «сом» = KGS.',
     '- merchant: получатель — название магазина/ИП/сервиса, либо имя человека для перевода. Без номера телефона и счёта.',
@@ -252,9 +264,13 @@ function extractFromImage_(base64, mime, categories) {
   throw new Error('Claude не вернул текстовый ответ');
 }
 
-/** Решает, записывать ли распознанную операцию как расход. Чистая функция. */
-function interpretExtraction(x) {
+/**
+ * Решает, записывать ли распознанную операцию как расход. Чистая функция.
+ * fareMax: QR-оплата частному лицу на сумму до fareMax считается проездом (маршрутки в Бишкеке).
+ */
+function interpretExtraction(x, fareMax) {
   x = x || {};
+  if (fareMax === undefined || fareMax === null || isNaN(Number(fareMax))) fareMax = DEFAULT_FARE_MAX;
   var amount = Number(x.amount);
   if (x.kind === 'not_a_transaction' || !(amount > 0)) {
     return { record: false, message: 'Не нашёл на картинке операцию' };
@@ -262,10 +278,11 @@ function interpretExtraction(x) {
   if (x.kind === 'income' || x.kind === 'transfer_in') {
     return { record: false, message: 'Это поступление (' + formatAmount_(amount) + ' ' + (x.currency || DEFAULT_CURRENCY) + '), не записал как расход' };
   }
-  if (x.kind === 'own_transfer') {
+  if (x.kind === 'own_transfer' || x.recipient === 'self') {
     return { record: false, message: 'Перевод между своими счетами — не расход, пропустил' };
   }
   var suggested = cleanText(x.category);
+  if (x.method === 'qr' && x.recipient === 'person' && amount <= Number(fareMax)) suggested = TRANSPORT;
   return {
     record: true,
     tx: {
@@ -321,10 +338,22 @@ function loadCategories_(ss) {
     var c = cleanText(r[1]);
     if (c && !seen[c]) { seen[c] = true; list.push(c); }
   });
-  ['Транспорт', 'Переводы', 'Коммуналка', 'Одежда', 'Дом', 'Другое'].forEach(function (c) {
+  [TRANSPORT, 'Переводы', 'Семья', 'Коммуналка', 'Одежда', 'Дом', 'Другое'].forEach(function (c) {
     if (!seen[c]) { seen[c] = true; list.push(c); }
   });
   return list;
+}
+
+/** Лист «Настройки»: колонка A — название, B — значение. */
+function loadSettings_(ss) {
+  var settings = { fareMax: DEFAULT_FARE_MAX };
+  var sheet = ss.getSheetByName(SHEET_SETTINGS);
+  if (!sheet || sheet.getLastRow() < 1) return settings;
+  sheet.getRange(1, 1, sheet.getLastRow(), 2).getValues().forEach(function (row) {
+    var key = cleanText(row[0]).toLowerCase();
+    if (key.indexOf('проезд') !== -1 && row[1] !== '' && !isNaN(Number(row[1]))) settings.fareMax = Number(row[1]);
+  });
+  return settings;
 }
 
 function stripToken_(body) {
@@ -470,6 +499,16 @@ function setup() {
     rules.getRange('1:1').setFontWeight('bold');
   }
 
+  var settings = ss.getSheetByName(SHEET_SETTINGS) || ss.insertSheet(SHEET_SETTINGS);
+  if (settings.getLastRow() === 0) {
+    settings.getRange(1, 1, 3, 2).setValues([
+      ['Максимальная цена проезда (QR-оплата человеку до этой суммы → «' + TRANSPORT + '»)', DEFAULT_FARE_MAX],
+      ['', ''],
+      ['Категория «' + EXCLUDED + '» не попадает в сводку: ставь её переводам себе и родным (через «Правила» по имени).', '']
+    ]);
+    settings.setColumnWidth(1, 520);
+  }
+
   buildSummary_(ss);
 
   var sheet1 = ss.getSheetByName('Sheet1') || ss.getSheetByName('Лист1');
@@ -493,20 +532,20 @@ function buildSummary_(ss) {
   sheet.getRange('A1').setValue('Этот месяц по категориям').setFontWeight('bold');
   sheet.getRange('A2').setFormula(
     '=IFERROR(QUERY(' + tx + ',"select E, sum(B) where A >= date \'"&' + monthStart +
-    '&"\' and B is not null group by E order by sum(B) desc label E \'Категория\', sum(B) \'Сумма\'",0),"Пока нет данных")');
+    '&"\' and B is not null and E <> \'' + EXCLUDED + '\' group by E order by sum(B) desc label E \'Категория\', sum(B) \'Сумма\'",0),"Пока нет данных")');
 
   sheet.getRange('D1').setValue('Этот месяц: топ магазинов').setFontWeight('bold');
   sheet.getRange('D2').setFormula(
     '=IFERROR(QUERY(' + tx + ',"select D, count(B), sum(B) where A >= date \'"&' + monthStart +
-    '&"\' and B is not null group by D order by sum(B) desc limit 15 label D \'Магазин\', count(B) \'Раз\', sum(B) \'Сумма\'",0),"Пока нет данных")');
+    '&"\' and B is not null and E <> \'' + EXCLUDED + '\' group by D order by sum(B) desc limit 15 label D \'Магазин\', count(B) \'Раз\', sum(B) \'Сумма\'",0),"Пока нет данных")');
 
   sheet.getRange('H1').setValue('По месяцам').setFontWeight('bold');
   sheet.getRange('H2').setFormula(
-    '=IFERROR(QUERY(' + tx + ',"select year(A), month(A)+1, sum(B) where B is not null group by year(A), month(A)+1 ' +
+    '=IFERROR(QUERY(' + tx + ',"select year(A), month(A)+1, sum(B) where B is not null and E <> \'' + EXCLUDED + '\' group by year(A), month(A)+1 ' +
     'order by year(A) desc, month(A)+1 desc label year(A) \'Год\', month(A)+1 \'Месяц\', sum(B) \'Сумма\'",0),"Пока нет данных")');
 
   sheet.getRange('L1').setValue('Всего за этот месяц').setFontWeight('bold');
-  sheet.getRange('L2').setFormula('=SUMIFS(\'' + SHEET_TX + '\'!B2:B,\'' + SHEET_TX + '\'!A2:A,">="&(EOMONTH(TODAY(),-1)+1))');
+  sheet.getRange('L2').setFormula('=SUMIFS(\'' + SHEET_TX + '\'!B2:B,\'' + SHEET_TX + '\'!A2:A,">="&(EOMONTH(TODAY(),-1)+1),\'' + SHEET_TX + '\'!E2:E,"<>' + EXCLUDED + '")');
   sheet.getRange('L2').setNumberFormat('#,##0.00');
 
   sheet.getRange('B:B').setNumberFormat('#,##0.00');
