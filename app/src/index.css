@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+/* Токены: светлая и тёмная тема (тёмная — отдельно подобранные шаги, не инверсия). */
+:root {
+  color-scheme: light;
+  --bg: #f4f4f1;
+  --surface: #fcfcfb;
+  --surface-2: #efeeea;
+  --line: #e4e3de;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --ink-3: #8a8983;
+  --accent: #2a78d6;
+  --accent-soft: #cde2fb;
+  --accent-ink: #184f95;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --critical: #d03b3b;
+  --hero-from: #2a78d6;
+  --hero-to: #184f95;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0f0f0e;
+    --surface: #1a1a19;
+    --surface-2: #262624;
+    --line: #2e2e2b;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --ink-3: #8f8e86;
+    --accent: #3987e5;
+    --accent-soft: #1c3656;
+    --accent-ink: #9ec5f4;
+    --hero-from: #256abf;
+    --hero-to: #0d366b;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f0f0e;
+  --surface: #1a1a19;
+  --surface-2: #262624;
+  --line: #2e2e2b;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --ink-3: #8f8e86;
+  --accent: #3987e5;
+  --accent-soft: #1c3656;
+  --accent-ink: #9ec5f4;
+  --hero-from: #256abf;
+  --hero-to: #0d366b;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+  --color-good: var(--good);
+  --color-warning: var(--warning);
+  --color-critical: var(--critical);
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif;
+}
+
+html, body, #root { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+.tnum { font-variant-numeric: tabular-nums; }
+.pt-safe { padding-top: max(env(safe-area-inset-top), 12px); }
+.pb-safe { padding-bottom: max(env(safe-area-inset-bottom), 8px); }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
+button { cursor: pointer; }
+input { font-size: 16px; } /* iOS не зумит поле ввода */

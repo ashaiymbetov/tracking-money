@@ -16,6 +16,8 @@ var UNCATEGORIZED = 'Без категории';
 var EXCLUDED = 'Не учитывать';        // строка остаётся в таблице, но не попадает в сводку
 var TRANSPORT = 'Транспорт';
 var SHEET_SETTINGS = 'Настройки';
+var SHEET_BUDGETS = 'Бюджеты';
+var API_MONTHS = 13;                  // сколько месяцев истории отдаёт API приложению
 var DEFAULT_FARE_MAX = 50;            // QR-оплата человеку до этой суммы = проезд в маршрутке
 var TIMEZONE = 'Asia/Bishkek';
 var DEFAULT_CURRENCY = 'KGS';
@@ -99,7 +101,9 @@ function doPost(e) {
     var lock = LockService.getScriptLock();
     lock.waitLock(10000);
     try {
-      var result = addTransaction_(body);
+      var result = body.action === 'setCategory' ? setCategory_(body)
+        : body.action === 'setBudget' ? setBudget_(body)
+        : addTransaction_(body);
       return json_(result);
     } finally {
       lock.releaseLock();
@@ -109,8 +113,117 @@ function doPost(e) {
   }
 }
 
-function doGet() {
+function doGet(e) {
+  var p = (e && e.parameter) || {};
+  if (p.action === 'data') {
+    if (p.token !== PropertiesService.getScriptProperties().getProperty('TOKEN')) return fail_('неверный токен');
+    try {
+      return json_(buildData_(getSpreadsheet_()));
+    } catch (err) {
+      return fail_(String(err && err.message || err));
+    }
+  }
   return json_({ ok: true, message: 'Трекер расходов работает. Используй POST.' });
+}
+
+// ---------------------------------------------------------------------------
+// API для приложения
+// ---------------------------------------------------------------------------
+
+/** Все операции за последние API_MONTHS месяцев + справочники. */
+function buildData_(ss) {
+  var sheet = ss.getSheetByName(SHEET_TX);
+  var now = new Date();
+  var from = new Date(now.getFullYear(), now.getMonth() - (API_MONTHS - 1), 1);
+  var tx = [];
+  var last = sheet.getLastRow();
+  if (last >= 2) {
+    var values = sheet.getRange(2, 1, last - 1, 7).getValues();
+    for (var i = 0; i < values.length; i++) {
+      var r = values[i];
+      if (!isDate_(r[0]) || r[0] < from || r[1] === '' || isNaN(Number(r[1]))) continue;
+      tx.push({
+        id: i + 2,
+        date: r[0].toISOString(),
+        amount: Number(r[1]),
+        currency: String(r[2] || DEFAULT_CURRENCY),
+        merchant: String(r[3] || ''),
+        category: String(r[4] || UNCATEGORIZED),
+        card: String(r[5] || ''),
+        source: String(r[6] || '')
+      });
+    }
+  }
+  var categories = loadCategories_(ss);
+  tx.forEach(function (t) { if (categories.indexOf(t.category) === -1) categories.push(t.category); });
+  [UNCATEGORIZED, EXCLUDED].forEach(function (c) { if (categories.indexOf(c) === -1) categories.push(c); });
+
+  return {
+    ok: true,
+    generatedAt: now.toISOString(),
+    currency: DEFAULT_CURRENCY,
+    excludedCategory: EXCLUDED,
+    uncategorized: UNCATEGORIZED,
+    categories: categories,
+    budgets: loadBudgets_(ss),
+    settings: loadSettings_(ss),
+    transactions: tx
+  };
+}
+
+function loadBudgets_(ss) {
+  var sheet = ss.getSheetByName(SHEET_BUDGETS);
+  var budgets = {};
+  if (!sheet || sheet.getLastRow() < 2) return budgets;
+  sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues().forEach(function (r) {
+    var c = cleanText(r[0]);
+    if (c && Number(r[1]) > 0) budgets[c] = Number(r[1]);
+  });
+  return budgets;
+}
+
+/** Смена категории операции; remember=true — ещё и правило «магазин → категория» (встаёт первым). */
+function setCategory_(body) {
+  var ss = getSpreadsheet_();
+  var sheet = ss.getSheetByName(SHEET_TX);
+  var row = Number(body.id);
+  var category = cleanText(body.category);
+  if (!category) return { ok: false, error: 'не указана категория', message: '⚠️ Не указана категория' };
+  if (!(row >= 2 && row <= sheet.getLastRow())) return { ok: false, error: 'строка не найдена', message: '⚠️ Операция не найдена' };
+  var merchant = String(sheet.getRange(row, 4).getValue());
+  if (body.merchant !== undefined && cleanText(body.merchant) !== cleanText(merchant)) {
+    return { ok: false, error: 'таблица изменилась', message: '⚠️ Таблица изменилась, обнови данные' };
+  }
+  sheet.getRange(row, 5).setValue(category);
+
+  if (body.remember && cleanText(merchant)) {
+    var rules = ss.getSheetByName(SHEET_RULES);
+    rules.insertRowBefore(2);
+    rules.getRange(2, 1, 1, 2).setValues([[cleanText(merchant).toLowerCase(), category]]);
+    recategorize_(false);
+  }
+  return { ok: true, message: merchant + ' → ' + category };
+}
+
+/** Лимит на категорию в месяц; limit 0 — убрать. */
+function setBudget_(body) {
+  var ss = getSpreadsheet_();
+  var category = cleanText(body.category);
+  var limit = Number(body.limit);
+  if (!category || isNaN(limit) || limit < 0) return { ok: false, error: 'неверный бюджет', message: '⚠️ Неверный бюджет' };
+  var sheet = ss.getSheetByName(SHEET_BUDGETS) || ss.insertSheet(SHEET_BUDGETS);
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(['Категория', 'Лимит в месяц']);
+    sheet.setFrozenRows(1);
+    sheet.getRange('1:1').setFontWeight('bold');
+  }
+  var last = sheet.getLastRow();
+  var names = last >= 2 ? sheet.getRange(2, 1, last - 1, 1).getValues().map(function (r) { return cleanText(r[0]); }) : [];
+  var idx = names.indexOf(category);
+  if (idx !== -1 && limit === 0) sheet.deleteRow(idx + 2);
+  else if (idx !== -1) sheet.getRange(idx + 2, 2).setValue(limit);
+  else if (limit > 0) sheet.appendRow([category, limit]);
+  return { ok: true, budgets: loadBudgets_(ss) };
 }
 
 function parseBody_(e) {
@@ -163,7 +276,7 @@ function isDuplicate_(sheet, date, amount, merchant) {
   var rows = sheet.getRange(from, 1, last - from + 1, 4).getValues();
   for (var i = 0; i < rows.length; i++) {
     var d = rows[i][0];
-    if (!(d instanceof Date)) continue;
+    if (!isDate_(d)) continue;
     if (Math.abs(d.getTime() - date.getTime()) <= DUPLICATE_WINDOW_MS &&
         Number(rows[i][1]) === amount &&
         String(rows[i][3]) === merchant) {
@@ -370,6 +483,10 @@ function loadSettings_(ss) {
     if (key.indexOf('проезд') !== -1 && row[1] !== '' && !isNaN(Number(row[1]))) settings.fareMax = Number(row[1]);
   });
   return settings;
+}
+
+function isDate_(v) {
+  return Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime());
 }
 
 function stripToken_(body) {
@@ -613,7 +730,7 @@ function recategorize_(all) {
     if (cat !== values[i][1]) { values[i][1] = cat; changed++; }
   }
   range.setValues(values);
-  ss.toast('Обновлено строк: ' + changed);
+  try { ss.toast('Обновлено строк: ' + changed); } catch (ignored) {}
 }
 
 /**
