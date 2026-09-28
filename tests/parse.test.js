@@ -53,3 +53,8 @@ test('categorize: первое совпадение побеждает, реги
   const rules = [['GLOBUS', 'Продукты'], ['express', 'Другое']];
   assert.equal(categorize('globus express', rules), 'Продукты');
 });
+
+test('categorize: транспорт', () => {
+  assert.equal(categorize('Tulpar Bishkek', DEFAULT_RULES), 'Транспорт');
+  assert.equal(categorize('MP BISHKEKPASSAZHIRTRANSPORT', DEFAULT_RULES), 'Транспорт');
+});
