@@ -262,9 +262,14 @@ function loadRules_(ss) {
 
 /** Запусти один раз из редактора Apps Script. Повторный запуск безопасен. */
 function setup() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  ss.setSpreadsheetTimeZone(TIMEZONE);
   var props = PropertiesService.getScriptProperties();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) {
+    // Скрипт создан отдельно от таблицы (script.google.com) — берём ранее созданную или создаём новую.
+    var savedId = props.getProperty('SPREADSHEET_ID');
+    ss = savedId ? SpreadsheetApp.openById(savedId) : SpreadsheetApp.create('Расходы');
+  }
+  ss.setSpreadsheetTimeZone(TIMEZONE);
   props.setProperty('SPREADSHEET_ID', ss.getId());
   if (!props.getProperty('TOKEN')) props.setProperty('TOKEN', Utilities.getUuid().replace(/-/g, ''));
 
@@ -290,7 +295,8 @@ function setup() {
   var sheet1 = ss.getSheetByName('Sheet1') || ss.getSheetByName('Лист1');
   if (sheet1 && sheet1.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(sheet1);
 
-  Logger.log('Готово. Токен для Команды на iPhone: ' + props.getProperty('TOKEN'));
+  Logger.log('Готово. Таблица: ' + ss.getUrl());
+  Logger.log('Токен для Команды на iPhone: ' + props.getProperty('TOKEN'));
 }
 
 function buildSummary_(ss) {
@@ -371,5 +377,5 @@ function recategorize_(all) {
     if (cat !== values[i][1]) { values[i][1] = cat; changed++; }
   }
   range.setValues(values);
-  SpreadsheetApp.getActive().toast('Обновлено строк: ' + changed);
+  ss.toast('Обновлено строк: ' + changed);
 }
