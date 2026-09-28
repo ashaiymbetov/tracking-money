@@ -20,36 +20,19 @@ const Analytics = lazy(() => loadAnalytics().then(m => ({ default: m.Analytics }
 const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 /**
- * Вкладка — собственная область прокрутки. Остаётся смонтированной после первого открытия
- * (как в нативных приложениях): переключение мгновенное, позиция прокрутки своя у каждой вкладки.
+ * Вкладка остаётся смонтированной после первого открытия (как в нативных приложениях):
+ * переключение мгновенное, без пересоздания экрана; появление — дешёвая анимация на GPU.
  */
-function TabPanel({ active, panelRef, onScrolled, children }: {
-  active: boolean;
-  panelRef: (el: HTMLDivElement | null) => void;
-  onScrolled: (scrolled: boolean) => void;
-  children: ReactNode;
-}) {
-  const ref = useRef<HTMLDivElement | null>(null);
+function TabPanel({ active, children }: { active: boolean; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    if (!active || !ref.current) return;
-    onScrolled(ref.current.scrollTop > 4);
-    if (reducedMotion()) return;
+    if (!active || !ref.current || reducedMotion()) return;
     ref.current.animate(
       [{ opacity: 0, transform: 'translate3d(0, 8px, 0)' }, { opacity: 1, transform: 'none' }],
       { duration: 220, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
     );
-  }, [active, onScrolled]);
-  return (
-    <div
-      ref={el => { ref.current = el; panelRef(el); }}
-      hidden={!active}
-      onScroll={e => onScrolled(e.currentTarget.scrollTop > 4)}
-      className="tab-scroll absolute inset-0 px-4 pt-2"
-      style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 104px)' }}
-    >
-      {children}
-    </div>
-  );
+  }, [active]);
+  return <div ref={ref} hidden={!active}>{children}</div>;
 }
 
 const TITLES: Record<Tab, string> = { home: 'Обзор', list: 'Операции', stats: 'Аналитика', budgets: 'Бюджеты' };
@@ -69,11 +52,6 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
   const visited = useRef(new Set<Tab>(['home']));
   visited.current.add(tab);
   const scrollByTab = useRef<Partial<Record<Tab, number>>>({});
-  const panels = useRef<Partial<Record<Tab, HTMLDivElement | null>>>({});
-  const panelRefs = useMemo(() => {
-    const make = (t: Tab) => (el: HTMLDivElement | null) => { panels.current[t] = el; };
-    return { home: make('home'), list: make('list'), stats: make('stats'), budgets: make('budgets') };
-  }, []);
   const [scrolled, setScrolled] = useState(false);   // тонкая линия под шапкой, когда контент уехал под неё
   const [month, setMonth] = useState<MonthKey>(() => monthKey(new Date()));
   const [filter, setFilter] = useState('');
@@ -90,14 +68,21 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
   const notify = useCallback((t: string) => { setToast(t); setTimeout(() => setToast(null), 2200); }, []);
   const onError = useCallback((e: Error) => notify(`⚠️ ${e.message}`), [notify]);
 
-  // У каждой вкладки своя позиция прокрутки (display:none сбрасывает scrollTop — восстанавливаем сами).
+  // Прокручивается сама страница: только так iOS отдаёт веб-приложению полный экран
+  // (у непрокручиваемой страницы окно укорачивается, и таб-бар «всплывает» над чёрной полосой).
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 4);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+  // У каждой вкладки своя позиция прокрутки.
   useLayoutEffect(() => {
-    const el = panels.current[tab];
-    if (el) el.scrollTop = scrollByTab.current[tab] ?? 0;
+    window.scrollTo(0, scrollByTab.current[tab] ?? 0);
+    setScrolled(window.scrollY > 4);
   }, [tab]);
   const switchTab = useCallback((t: Tab, keepFilter = false) => {
-    if (t === tab) { panels.current[t]?.scrollTo({ top: 0, behavior: 'smooth' }); return; }   // повторное нажатие — наверх, как в iOS
-    scrollByTab.current[tab] = panels.current[tab]?.scrollTop ?? 0;
+    if (t === tab) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }   // повторное нажатие — наверх, как в iOS
+    scrollByTab.current[tab] = window.scrollY;
     if (t !== 'list' && !keepFilter) setFilter('');
     setTab(t);
   }, [tab]);
@@ -115,9 +100,9 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
   const minMonth = shiftMonth(now, -12);
 
   return (
-    // Высота — из --app-h (см. lib/viewport.ts), а не inset-0: в iOS 26 у PWA «окно» бывает ниже экрана.
-    <div className="fixed inset-x-0 top-0 mx-auto flex max-w-lg flex-col" style={{ height: 'var(--app-h, 100dvh)' }}>
-      <header className={clsx('pt-safe relative z-20 shrink-0 bg-bg px-4 pb-2 transition-shadow duration-200',
+    // Страница всегда чуть выше экрана — даже пока грузятся данные, иначе iOS укоротит окно.
+    <div className="mx-auto max-w-lg" style={{ minHeight: 'calc(100lvh + 1px)' }}>
+      <header className={clsx('pt-safe sticky top-0 z-20 bg-bg px-4 pb-2 transition-shadow duration-200',
         scrolled && 'shadow-[0_1px_0_var(--line)]')}>
         <div className="flex items-center justify-between pt-1">
           <h1 className="text-[28px] font-bold tracking-tight">{TITLES[tab]}</h1>
@@ -136,37 +121,35 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
         </div>
       </header>
 
-      <main className="relative min-h-0 flex-1">
+      <main className="px-4 pt-2" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 104px)' }}>
         {!data ? (
-          <div className="tab-scroll absolute inset-0 px-4 pt-2">
-            {query.isError ? (
-              <div className="mt-10 flex flex-col items-center gap-4 text-center">
-                <p className="text-ink-2">⚠️ {(query.error as Error).message}</p>
-                <button onClick={() => query.refetch()} className="rounded-2xl bg-accent px-5 py-3 font-semibold text-white">Повторить</button>
-                <button onClick={onLogout} className="text-sm text-ink-3">Изменить подключение</button>
-              </div>
-            ) : tab === 'list' ? <ListSkeleton /> : tab === 'stats' ? <AnalyticsSkeleton /> : tab === 'budgets' ? <BudgetsSkeleton /> : <HomeSkeleton />}
-          </div>
+          query.isError ? (
+            <div className="mt-10 flex flex-col items-center gap-4 text-center">
+              <p className="text-ink-2">⚠️ {(query.error as Error).message}</p>
+              <button onClick={() => query.refetch()} className="rounded-2xl bg-accent px-5 py-3 font-semibold text-white">Повторить</button>
+              <button onClick={onLogout} className="text-sm text-ink-3">Изменить подключение</button>
+            </div>
+          ) : tab === 'list' ? <ListSkeleton /> : tab === 'stats' ? <AnalyticsSkeleton /> : tab === 'budgets' ? <BudgetsSkeleton /> : <HomeSkeleton />
         ) : (
           <>
-            <TabPanel active={tab === 'home'} panelRef={panelRefs.home} onScrolled={setScrolled}>
+            <TabPanel active={tab === 'home'}>
               <Home data={data} txs={txs} month={month} onCategory={openCategory} onTx={setEditing}
                 onAll={openAll} onBudgets={openBudgets} />
             </TabPanel>
             {visited.current.has('list') && (
-              <TabPanel active={tab === 'list'} panelRef={panelRefs.list} onScrolled={setScrolled}>
+              <TabPanel active={tab === 'list'}>
                 <Transactions data={data} month={month} category={filter} onCategory={setFilter} onTx={setEditing} />
               </TabPanel>
             )}
             {visited.current.has('stats') && (
-              <TabPanel active={tab === 'stats'} panelRef={panelRefs.stats} onScrolled={setScrolled}>
+              <TabPanel active={tab === 'stats'}>
                 <Suspense fallback={<AnalyticsSkeleton />}>
                   <Analytics txs={txs} month={month} active={tab === 'stats'} onMonth={setMonth} onCategory={openCategory} />
                 </Suspense>
               </TabPanel>
             )}
             {visited.current.has('budgets') && (
-              <TabPanel active={tab === 'budgets'} panelRef={panelRefs.budgets} onScrolled={setScrolled}>
+              <TabPanel active={tab === 'budgets'}>
                 <Budgets data={data} txs={txs} month={month} onEdit={setBudgetFor} />
               </TabPanel>
             )}

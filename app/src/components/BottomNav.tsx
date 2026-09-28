@@ -18,7 +18,7 @@ const liquid = { type: 'spring', stiffness: 480, damping: 32, mass: 0.9 } as con
 export function BottomNav({ tab, onTab, onAdd }: { tab: Tab; onTab: (t: Tab) => void; onAdd: () => void }) {
   return (
     <nav
-      className="pointer-events-none absolute inset-x-0 bottom-0 z-30 px-3"
+      className="pointer-events-none fixed inset-x-0 bottom-0 z-30 px-3"
       style={{ paddingBottom: 'max(calc(env(safe-area-inset-bottom) - 10px), 10px)' }}
     >
       <div className="mx-auto flex max-w-lg items-center gap-2.5">

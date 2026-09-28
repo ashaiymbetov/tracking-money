@@ -135,16 +135,10 @@ input { font-size: 16px; } /* iOS не зумит поле ввода */
   box-shadow: inset 0 1px 0 var(--glass-highlight);
 }
 
-/* Каркас как у нативного приложения: страница не прокручивается и не пружинит целиком —
-   шапка и таб-бар стоят на месте, прокручивается только область вкладки. */
-html, body { overflow: hidden; overscroll-behavior: none; }
-.tab-scroll {
-  overflow-y: auto;
-  overscroll-behavior-y: contain;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-}
-.tab-scroll::-webkit-scrollbar { display: none; }
+/* Прокручивается сама страница (так iOS даёт веб-приложению полный экран); шапка — sticky,
+   таб-бар — fixed. Полосу прокрутки прячем, пружинящий отскок iOS оставляем. */
+html { scrollbar-width: none; }
+html::-webkit-scrollbar { display: none; }
 
 /* Скелетоны */
 .skeleton { position: relative; overflow: hidden; background: var(--surface-2); }

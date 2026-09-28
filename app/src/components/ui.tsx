@@ -56,13 +56,13 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
       {open && (
         <>
           <motion.div
-            className="absolute inset-0 z-40 bg-black/45"
+            className="fixed inset-0 z-40 bg-black/45"
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             onClick={onClose}
           />
           <motion.div
             role="dialog" aria-label={title}
-            className="pb-safe absolute inset-x-0 bottom-0 z-50 flex max-h-[88%] flex-col rounded-t-[28px] bg-surface will-change-transform"
+            className="pb-safe fixed inset-x-0 bottom-0 z-50 mx-auto flex max-h-[88dvh] max-w-lg flex-col rounded-t-[28px] bg-surface will-change-transform"
             initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
             transition={{ type: 'spring', damping: 34, stiffness: 380, mass: 0.8 }}
             drag="y" dragListener={false} dragControls={drag}
