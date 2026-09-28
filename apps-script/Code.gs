@@ -292,6 +292,8 @@ function interpretExtraction(x, fareMax) {
       date: cleanText(x.date),
       bank: cleanText(x.bank),
       kind: x.kind,
+      method: x.method || '',
+      recipient: x.recipient || '',
       suggested_category: suggested === UNCATEGORIZED ? '' : suggested
     }
   };
@@ -307,7 +309,9 @@ function mergeExtraction_(body, tx) {
     category: cleanText(body.category),
     suggested_category: tx.suggested_category,
     source: cleanText(body.source) || 'screenshot',
-    kind: tx.kind
+    kind: tx.kind,
+    method: tx.method,
+    recipient: tx.recipient
   };
 }
 
