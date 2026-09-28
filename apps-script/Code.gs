@@ -265,6 +265,18 @@ function extractFromImage_(base64, mime, categories) {
 }
 
 /**
+ * Проезд в маршрутке: небольшая оплата или перевод частному лицу (водителю).
+ * В Бишкеке это часто выглядит как обычный перевод на номер, без слова «QR», поэтому способ оплаты не учитываем.
+ * recipient пустой — строки, записанные до появления этого поля.
+ */
+function isFare(kind, recipient, amount, fareMax) {
+  if (kind !== 'transfer_out' && kind !== 'payment') return false;
+  if (recipient === 'business' || recipient === 'self') return false;
+  if (kind === 'payment' && recipient !== 'person') return false;
+  return Number(amount) > 0 && Number(amount) <= Number(fareMax);
+}
+
+/**
  * Решает, записывать ли распознанную операцию как расход. Чистая функция.
  * fareMax: QR-оплата частному лицу на сумму до fareMax считается проездом (маршрутки в Бишкеке).
  */
@@ -282,7 +294,7 @@ function interpretExtraction(x, fareMax) {
     return { record: false, message: 'Перевод между своими счетами — не расход, пропустил' };
   }
   var suggested = cleanText(x.category);
-  if (x.method === 'qr' && x.recipient === 'person' && amount <= Number(fareMax)) suggested = TRANSPORT;
+  if (isFare(x.kind, x.recipient, amount, fareMax)) suggested = TRANSPORT;
   return {
     record: true,
     tx: {
@@ -572,6 +584,7 @@ function onOpen() {
     .createMenu('Расходы')
     .addItem('Пересчитать «' + UNCATEGORIZED + '» по правилам', 'recategorizeUncategorized')
     .addItem('Пересчитать ВСЕ категории по правилам', 'recategorizeAll')
+    .addItem('Разнести мелкие переводы людям в «' + TRANSPORT + '»', 'applyFareRule')
     .addItem('Пересобрать сводку', 'rebuildSummary')
     .addItem('Показать токен', 'showToken')
     .addToUi();
@@ -601,6 +614,34 @@ function recategorize_(all) {
   }
   range.setValues(values);
   ss.toast('Обновлено строк: ' + changed);
+}
+
+/**
+ * Для уже записанных строк со скринов: перевод частному лицу до порога проезда → «Транспорт».
+ * Не трогает строки, чьё имя есть в «Правилах», и строки, где категорию ставили вручную на что-то кроме «Переводы».
+ */
+function applyFareRule() {
+  var ss = getSpreadsheet_();
+  var sheet = ss.getSheetByName(SHEET_TX);
+  var last = sheet.getLastRow();
+  if (last < 2) return;
+  var rules = loadRules_(ss);
+  var fareMax = loadSettings_(ss).fareMax;
+  var range = sheet.getRange(2, 1, last - 1, TX_HEADERS.length);
+  var values = range.getValues();
+  var changed = 0;
+  for (var i = 0; i < values.length; i++) {
+    var row = values[i];
+    var current = String(row[4]);
+    if (current !== 'Переводы' && current !== UNCATEGORIZED) continue;
+    if (categorize(row[3], rules) !== UNCATEGORIZED) continue;
+    var raw = {};
+    try { raw = JSON.parse(row[7] || '{}'); } catch (ignored) {}
+    if (!isFare(raw.kind, raw.recipient || '', row[1], fareMax)) continue;
+    sheet.getRange(i + 2, 5).setValue(TRANSPORT);
+    changed++;
+  }
+  ss.toast('Перенесено в «' + TRANSPORT + '»: ' + changed);
 }
 
 /**

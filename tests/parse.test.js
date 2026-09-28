@@ -116,8 +116,10 @@ test('categorize: Tulpar-Card (оплата в автобусе)', () => {
 test('interpretExtraction: QR-оплата человеку на мелкую сумму = проезд в маршрутке', () => {
   const base = { kind: 'transfer_out', amount: 45, currency: 'KGS', merchant: 'Алтынбек А.', date: '', bank: 'MBank', category: 'Переводы' };
   assert.equal(interpretExtraction({ ...base, method: 'qr', recipient: 'person' }, 50).tx.suggested_category, 'Транспорт');
-  // перевод по номеру — не проезд
-  assert.equal(interpretExtraction({ ...base, method: 'phone_transfer', recipient: 'person' }, 50).tx.suggested_category, 'Переводы');
+  // перевод по номеру тоже проезд: оплата маршрутки через O!Деньги выглядит как перевод на номер
+  assert.equal(interpretExtraction({ ...base, method: 'phone_transfer', recipient: 'person' }, 50).tx.suggested_category, 'Транспорт');
+  // перевод магазину/ИП — не проезд
+  assert.equal(interpretExtraction({ ...base, method: 'phone_transfer', recipient: 'business' }, 50).tx.suggested_category, 'Переводы');
   // дороже порога — не проезд
   assert.equal(interpretExtraction({ ...base, amount: 300, method: 'qr', recipient: 'person' }, 50).tx.suggested_category, 'Переводы');
   // QR магазину — категория от Claude
@@ -133,4 +135,12 @@ test('interpretExtraction: перевод себе пропускается', ()
 test('categorize: имя из «Правил» работает и для кириллицы', () => {
   const rules = [['алтынбек', 'Не учитывать']];
   assert.equal(categorize('Алтынбек А.', rules), 'Не учитывать');
+});
+
+test('isFare: строки, записанные до появления recipient', () => {
+  const { isFare } = ctx;
+  assert.equal(isFare('transfer_out', '', 45, 50), true);
+  assert.equal(isFare('transfer_out', '', 500, 50), false);
+  assert.equal(isFare('payment', '', 45, 50), false);     // оплата без типа получателя — скорее магазин
+  assert.equal(isFare(undefined, '', 45, 50), false);     // Apple Pay / ручной ввод
 });
