@@ -8,6 +8,7 @@ import { Home } from './screens/Home';
 import { Transactions } from './screens/Transactions';
 import { Budgets } from './screens/Budgets';
 import { Setup } from './screens/Setup';
+import { AnalyticsSkeleton, BudgetsSkeleton, HomeSkeleton, ListSkeleton } from './components/Skeletons';
 import { loadConnection, saveConnection } from './lib/config';
 import { clearCache, useAddExpense, useData, useSetBudget, useSetCategory } from './lib/queries';
 import { countable, monthKey, shiftMonth, type MonthKey } from './lib/stats';
@@ -19,19 +20,36 @@ const Analytics = lazy(() => loadAnalytics().then(m => ({ default: m.Analytics }
 const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 /**
- * Вкладка остаётся смонтированной после первого открытия (как в нативных приложениях):
- * переключение мгновенное, без пересоздания экрана; появление — дешёвая анимация на GPU.
+ * Вкладка — собственная область прокрутки. Остаётся смонтированной после первого открытия
+ * (как в нативных приложениях): переключение мгновенное, позиция прокрутки своя у каждой вкладки.
  */
-function TabPanel({ active, children }: { active: boolean; children: ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
+function TabPanel({ active, panelRef, onScrolled, children }: {
+  active: boolean;
+  panelRef: (el: HTMLDivElement | null) => void;
+  onScrolled: (scrolled: boolean) => void;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
-    if (!active || !ref.current || reducedMotion()) return;
+    if (!active || !ref.current) return;
+    onScrolled(ref.current.scrollTop > 4);
+    if (reducedMotion()) return;
     ref.current.animate(
       [{ opacity: 0, transform: 'translate3d(0, 8px, 0)' }, { opacity: 1, transform: 'none' }],
       { duration: 220, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
     );
-  }, [active]);
-  return <div ref={ref} hidden={!active}>{children}</div>;
+  }, [active, onScrolled]);
+  return (
+    <div
+      ref={el => { ref.current = el; panelRef(el); }}
+      hidden={!active}
+      onScroll={e => onScrolled(e.currentTarget.scrollTop > 4)}
+      className="tab-scroll absolute inset-0 px-4 pt-2"
+      style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 104px)' }}
+    >
+      {children}
+    </div>
+  );
 }
 
 const TITLES: Record<Tab, string> = { home: 'Обзор', list: 'Операции', stats: 'Аналитика', budgets: 'Бюджеты' };
@@ -51,6 +69,12 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
   const visited = useRef(new Set<Tab>(['home']));
   visited.current.add(tab);
   const scrollByTab = useRef<Partial<Record<Tab, number>>>({});
+  const panels = useRef<Partial<Record<Tab, HTMLDivElement | null>>>({});
+  const panelRefs = useMemo(() => {
+    const make = (t: Tab) => (el: HTMLDivElement | null) => { panels.current[t] = el; };
+    return { home: make('home'), list: make('list'), stats: make('stats'), budgets: make('budgets') };
+  }, []);
+  const [scrolled, setScrolled] = useState(false);   // тонкая линия под шапкой, когда контент уехал под неё
   const [month, setMonth] = useState<MonthKey>(() => monthKey(new Date()));
   const [filter, setFilter] = useState('');
   const [editing, setEditing] = useState<Transaction | null>(null);
@@ -66,11 +90,14 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
   const notify = useCallback((t: string) => { setToast(t); setTimeout(() => setToast(null), 2200); }, []);
   const onError = useCallback((e: Error) => notify(`⚠️ ${e.message}`), [notify]);
 
-  // У каждой вкладки своя позиция прокрутки.
-  useLayoutEffect(() => { window.scrollTo(0, scrollByTab.current[tab] ?? 0); }, [tab]);
+  // У каждой вкладки своя позиция прокрутки (display:none сбрасывает scrollTop — восстанавливаем сами).
+  useLayoutEffect(() => {
+    const el = panels.current[tab];
+    if (el) el.scrollTop = scrollByTab.current[tab] ?? 0;
+  }, [tab]);
   const switchTab = useCallback((t: Tab, keepFilter = false) => {
-    if (t === tab) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }   // повторное нажатие — наверх, как в iOS
-    scrollByTab.current[tab] = window.scrollY;
+    if (t === tab) { panels.current[t]?.scrollTo({ top: 0, behavior: 'smooth' }); return; }   // повторное нажатие — наверх, как в iOS
+    scrollByTab.current[tab] = panels.current[tab]?.scrollTop ?? 0;
     if (t !== 'list' && !keepFilter) setFilter('');
     setTab(t);
   }, [tab]);
@@ -87,27 +114,10 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
   const now = monthKey(new Date());
   const minMonth = shiftMonth(now, -12);
 
-  if (!data) {
-    return (
-      <div className="flex min-h-full flex-col items-center justify-center gap-4 px-8 text-center">
-        {query.isError ? (
-          <>
-            <p className="text-ink-2">⚠️ {(query.error as Error).message}</p>
-            <button onClick={() => query.refetch()} className="rounded-2xl bg-accent px-5 py-3 font-semibold text-white">Повторить</button>
-            <button onClick={onLogout} className="text-sm text-ink-3">Изменить подключение</button>
-          </>
-        ) : (
-          <RefreshCw className="animate-spin text-ink-3" />
-        )}
-      </div>
-    );
-  }
-
-
-
   return (
-    <div className="mx-auto min-h-full max-w-lg">
-      <header className="pt-safe sticky top-0 z-20 bg-bg px-4 pb-2">
+    <div className="fixed inset-0 mx-auto flex max-w-lg flex-col">
+      <header className={clsx('pt-safe relative z-20 shrink-0 bg-bg px-4 pb-2 transition-shadow duration-200',
+        scrolled && 'shadow-[0_1px_0_var(--line)]')}>
         <div className="flex items-center justify-between pt-1">
           <h1 className="text-[28px] font-bold tracking-tight">{TITLES[tab]}</h1>
           <div className="flex items-center gap-1">
@@ -125,32 +135,47 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
         </div>
       </header>
 
-      <main className="px-4 pt-2 pb-32">
-        <TabPanel active={tab === 'home'}>
-          <Home data={data} txs={txs} month={month} onCategory={openCategory} onTx={setEditing}
-            onAll={openAll} onBudgets={openBudgets} />
-        </TabPanel>
-        {visited.current.has('list') && (
-          <TabPanel active={tab === 'list'}>
-            <Transactions data={data} month={month} category={filter} onCategory={setFilter} onTx={setEditing} />
-          </TabPanel>
-        )}
-        {visited.current.has('stats') && (
-          <TabPanel active={tab === 'stats'}>
-            <Suspense fallback={<div className="flex justify-center py-20"><RefreshCw className="animate-spin text-ink-3" /></div>}>
-              <Analytics txs={txs} month={month} active={tab === 'stats'} onMonth={setMonth} onCategory={openCategory} />
-            </Suspense>
-          </TabPanel>
-        )}
-        {visited.current.has('budgets') && (
-          <TabPanel active={tab === 'budgets'}>
-            <Budgets data={data} txs={txs} month={month} onEdit={setBudgetFor} />
-          </TabPanel>
+      <main className="relative min-h-0 flex-1">
+        {!data ? (
+          <div className="tab-scroll absolute inset-0 px-4 pt-2">
+            {query.isError ? (
+              <div className="mt-10 flex flex-col items-center gap-4 text-center">
+                <p className="text-ink-2">⚠️ {(query.error as Error).message}</p>
+                <button onClick={() => query.refetch()} className="rounded-2xl bg-accent px-5 py-3 font-semibold text-white">Повторить</button>
+                <button onClick={onLogout} className="text-sm text-ink-3">Изменить подключение</button>
+              </div>
+            ) : tab === 'list' ? <ListSkeleton /> : tab === 'stats' ? <AnalyticsSkeleton /> : tab === 'budgets' ? <BudgetsSkeleton /> : <HomeSkeleton />}
+          </div>
+        ) : (
+          <>
+            <TabPanel active={tab === 'home'} panelRef={panelRefs.home} onScrolled={setScrolled}>
+              <Home data={data} txs={txs} month={month} onCategory={openCategory} onTx={setEditing}
+                onAll={openAll} onBudgets={openBudgets} />
+            </TabPanel>
+            {visited.current.has('list') && (
+              <TabPanel active={tab === 'list'} panelRef={panelRefs.list} onScrolled={setScrolled}>
+                <Transactions data={data} month={month} category={filter} onCategory={setFilter} onTx={setEditing} />
+              </TabPanel>
+            )}
+            {visited.current.has('stats') && (
+              <TabPanel active={tab === 'stats'} panelRef={panelRefs.stats} onScrolled={setScrolled}>
+                <Suspense fallback={<AnalyticsSkeleton />}>
+                  <Analytics txs={txs} month={month} active={tab === 'stats'} onMonth={setMonth} onCategory={openCategory} />
+                </Suspense>
+              </TabPanel>
+            )}
+            {visited.current.has('budgets') && (
+              <TabPanel active={tab === 'budgets'} panelRef={panelRefs.budgets} onScrolled={setScrolled}>
+                <Budgets data={data} txs={txs} month={month} onEdit={setBudgetFor} />
+              </TabPanel>
+            )}
+          </>
         )}
       </main>
 
       <BottomNav tab={tab} onTab={switchTab} onAdd={() => setAdding(true)} />
 
+      {data && (<>
       <EditCategorySheet
         tx={editing} categories={data.categories} onClose={() => setEditing(null)}
         onSave={(category, remember) => {
@@ -177,10 +202,11 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
           setBudget.mutate({ category: c, limit }, { onSuccess: () => notify(limit ? 'Бюджет сохранён' : 'Бюджет убран'), onError });
         }}
       />
+      </>)}
       <Sheet open={settings} onClose={() => setSettings(false)} title="Настройки">
         <div className="mb-3 rounded-2xl bg-surface-2 p-3 text-sm text-ink-2">
           {conn.demo ? 'Сейчас показаны демо-данные.' : <>Подключено к таблице.<br /><span className="break-all text-ink-3">{conn.url}</span></>}
-          <div className="mt-2 text-ink-3">Обновлено: {new Date(data.generatedAt).toLocaleString('ru-RU')}</div>
+          {data && <div className="mt-2 text-ink-3">Обновлено: {new Date(data.generatedAt).toLocaleString('ru-RU')}</div>}
         </div>
         <button onClick={onLogout} className="mb-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-surface-2 py-3.5 font-semibold text-critical">
           <LogOut size={18} /> {conn.demo ? 'Подключить свою таблицу' : 'Отключить'}

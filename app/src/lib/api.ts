@@ -23,7 +23,11 @@ async function readJson(res: Response) {
 }
 
 export async function fetchData(c: Connection): Promise<AppData> {
-  if (c.demo) return demoData();
+  if (c.demo) {
+    // ?demo&slow — имитация медленной сети, чтобы посмотреть скелетоны.
+    if (new URLSearchParams(location.search).has('slow')) await new Promise(r => setTimeout(r, 2500));
+    return demoData();
+  }
   const url = new URL(c.url);
   url.searchParams.set('action', 'data');
   url.searchParams.set('token', c.token);

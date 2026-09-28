@@ -2,6 +2,7 @@ import { memo } from 'react';
 import { Card, Empty } from '../components/ui';
 import { CategoryBars } from '../components/charts';
 import { DailyChart, MonthlyChart } from '../components/TimeCharts';
+import { ChartSk } from '../components/Skeletons';
 import { CategoryBadge } from '../lib/categories';
 import { formatMoney } from '../lib/format';
 import { byCategory, byDay, byMerchant, byMonth, inMonth, monthKey, summarize, type MonthKey } from '../lib/stats';
@@ -36,11 +37,11 @@ export const Analytics = memo(function Analytics({ txs, month, active, onMonth, 
           <span className="inline-block h-px w-4 bg-ink-2" /> в среднем {formatMoney(s.perDay)}
         </span>
       ) : undefined}>
-        {!monthTx.length ? <Empty>Нет данных</Empty> : active ? <DailyChart data={days} month={month} average={s.perDay} /> : <div className="h-48" />}
+        {!monthTx.length ? <Empty>Нет данных</Empty> : active ? <DailyChart data={days} month={month} average={s.perDay} /> : <ChartSk />}
       </Card>
 
       <Card title="По месяцам">
-        {active ? <MonthlyChart data={byMonth(txs, monthKey(new Date()), 12)} selected={month} onSelect={onMonth} /> : <div className="h-48" />}
+        {active ? <MonthlyChart data={byMonth(txs, monthKey(new Date()), 12)} selected={month} onSelect={onMonth} /> : <ChartSk />}
       </Card>
 
       <Card title="Все категории">

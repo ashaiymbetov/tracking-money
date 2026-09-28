@@ -133,3 +133,30 @@ input { font-size: 16px; } /* iOS не зумит поле ввода */
   background: var(--glass-pill);
   box-shadow: inset 0 1px 0 var(--glass-highlight);
 }
+
+/* Каркас как у нативного приложения: страница не прокручивается и не пружинит целиком —
+   шапка и таб-бар стоят на месте, прокручивается только область вкладки. */
+html, body { overflow: hidden; overscroll-behavior: none; }
+.tab-scroll {
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.tab-scroll::-webkit-scrollbar { display: none; }
+
+/* Скелетоны */
+.skeleton { position: relative; overflow: hidden; background: var(--surface-2); }
+.skeleton::after, .skeleton-on-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, var(--shimmer), transparent);
+  animation: shimmer 1.3s ease-in-out infinite;
+}
+.skeleton-on-hero { position: relative; overflow: hidden; background: rgb(255 255 255 / 0.14); --shimmer: rgb(255 255 255 / 0.18); }
+:root { --shimmer: rgb(255 255 255 / 0.65); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --shimmer: rgb(255 255 255 / 0.06); } }
+:root[data-theme="dark"] { --shimmer: rgb(255 255 255 / 0.06); }
+@keyframes shimmer { to { transform: translateX(100%); } }
