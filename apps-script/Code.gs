@@ -559,3 +559,23 @@ function recategorize_(all) {
   range.setValues(values);
   ss.toast('Обновлено строк: ' + changed);
 }
+
+/**
+ * Запусти из редактора, если команда пишет «нет разрешения на вызов UrlFetchApp.fetch»:
+ * Google покажет окно доступа «Подключение к внешнему сервису» (нужно для Claude).
+ */
+function authorize() {
+  var res = UrlFetchApp.fetch('https://api.anthropic.com/v1/models', {
+    headers: {
+      'x-api-key': PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY') || '',
+      'anthropic-version': '2023-06-01'
+    },
+    muteHttpExceptions: true
+  });
+  var code = res.getResponseCode();
+  Logger.log(code === 200
+    ? 'Доступ в интернет есть, ключ Claude работает ✅'
+    : code === 401
+      ? 'Доступ в интернет есть, но ключ Claude неверный или не задан (401)'
+      : 'Доступ в интернет есть, ответ Claude API: ' + code + ' ' + res.getContentText().slice(0, 200));
+}
