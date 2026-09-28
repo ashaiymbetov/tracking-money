@@ -3,13 +3,22 @@ import { demoData, demoMutate } from './demo';
 
 export class ApiError extends Error {}
 
+/** Текст из HTML-ответа Google: заголовок и первые слова страницы — чтобы было понятно, что пошло не так. */
+export function describeHtml(text: string): string {
+  const title = /<title>([^<]*)<\/title>/i.exec(text)?.[1]?.trim();
+  const body = text.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+  return [title, body].filter(Boolean).join(' — ') || text.slice(0, 160);
+}
+
 async function readJson(res: Response) {
   const text = await res.text();
   try {
     return JSON.parse(text);
   } catch {
-    // Google вернул HTML (страница входа/ошибки) — обычно не сделан Deploy → New version или доступ не «Anyone».
-    throw new ApiError('Скрипт вернул не JSON. Проверь, что развёрнута новая версия и доступ — «Anyone».');
+    // Google вернул HTML: страница входа, ошибка скрипта или удалённое развёртывание.
+    throw new ApiError(`Скрипт вернул не данные (HTTP ${res.status}): «${describeHtml(text)}». ` +
+      'Проверь: Deploy → Manage deployments → New version, доступ «Anyone», и что URL заканчивается на /exec.');
   }
 }
 
@@ -18,9 +27,15 @@ export async function fetchData(c: Connection): Promise<AppData> {
   const url = new URL(c.url);
   url.searchParams.set('action', 'data');
   url.searchParams.set('token', c.token);
-  const res = await fetch(url, { redirect: 'follow' });
+  const res = await fetch(url, { redirect: 'follow' }).catch((e: unknown) => {
+    throw new ApiError(`Нет связи со скриптом (${e instanceof Error ? e.message : e}). Проверь интернет и URL.`);
+  });
   const body = await readJson(res);
   if (!body.ok) throw new ApiError(body.message?.replace(/^⚠️\s*/, '') || body.error || 'Ошибка скрипта');
+  if (!Array.isArray(body.transactions)) {
+    // Ответил старый doGet — код обновлён, но новая версия не развёрнута.
+    throw new ApiError('Скрипт старой версии: вставь новый Code.gs и сделай Deploy → Manage deployments → ✏️ → New version.');
+  }
   return body as AppData;
 }
 

@@ -52,3 +52,11 @@ describe('stats', () => {
     expect(g[0].items.map(t => t.id)).toEqual([3, 2]);
   });
 });
+
+import { describeHtml } from './api';
+describe('describeHtml', () => {
+  it('достаёт заголовок и текст страницы Google', () => {
+    const html = '<html><head><title>Ошибка</title><style>a{}</style></head><body><div>Функция скрипта не найдена: doGet</div></body></html>';
+    expect(describeHtml(html)).toBe('Ошибка — Ошибка Функция скрипта не найдена: doGet');
+  });
+});
