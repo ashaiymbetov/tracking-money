@@ -1,5 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { LogOut, RefreshCw, Settings } from 'lucide-react';
 import clsx from 'clsx';
 import { BottomNav, type Tab } from './components/BottomNav';
@@ -14,8 +13,26 @@ import { clearCache, useAddExpense, useData, useSetBudget, useSetCategory } from
 import { countable, monthKey, shiftMonth, type MonthKey } from './lib/stats';
 import type { Connection, Transaction } from './lib/types';
 
-// Recharts тяжёлый — грузим аналитику отдельным чанком, главная открывается сразу.
-const Analytics = lazy(() => import('./screens/Analytics').then(m => ({ default: m.Analytics })));
+// Recharts тяжёлый — грузим аналитику отдельным чанком, главная открывается сразу (а чанк подгружаем в фоне).
+const loadAnalytics = () => import('./screens/Analytics');
+const Analytics = lazy(() => loadAnalytics().then(m => ({ default: m.Analytics })));
+const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+/**
+ * Вкладка остаётся смонтированной после первого открытия (как в нативных приложениях):
+ * переключение мгновенное, без пересоздания экрана; появление — дешёвая анимация на GPU.
+ */
+function TabPanel({ active, children }: { active: boolean; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!active || !ref.current || reducedMotion()) return;
+    ref.current.animate(
+      [{ opacity: 0, transform: 'translate3d(0, 8px, 0)' }, { opacity: 1, transform: 'none' }],
+      { duration: 220, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
+    );
+  }, [active]);
+  return <div ref={ref} hidden={!active}>{children}</div>;
+}
 
 const TITLES: Record<Tab, string> = { home: 'Обзор', list: 'Операции', stats: 'Аналитика', budgets: 'Бюджеты' };
 
@@ -31,6 +48,9 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
   const query = useData(conn);
   const data = query.data;
   const [tab, setTab] = useState<Tab>('home');
+  const visited = useRef(new Set<Tab>(['home']));
+  visited.current.add(tab);
+  const scrollByTab = useRef<Partial<Record<Tab, number>>>({});
   const [month, setMonth] = useState<MonthKey>(() => monthKey(new Date()));
   const [filter, setFilter] = useState('');
   const [editing, setEditing] = useState<Transaction | null>(null);
@@ -46,7 +66,22 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
   const notify = useCallback((t: string) => { setToast(t); setTimeout(() => setToast(null), 2200); }, []);
   const onError = useCallback((e: Error) => notify(`⚠️ ${e.message}`), [notify]);
 
-  useEffect(() => { window.scrollTo({ top: 0 }); }, [tab]);
+  // У каждой вкладки своя позиция прокрутки.
+  useLayoutEffect(() => { window.scrollTo(0, scrollByTab.current[tab] ?? 0); }, [tab]);
+  const switchTab = useCallback((t: Tab, keepFilter = false) => {
+    if (t === tab) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }   // повторное нажатие — наверх, как в iOS
+    scrollByTab.current[tab] = window.scrollY;
+    if (t !== 'list' && !keepFilter) setFilter('');
+    setTab(t);
+  }, [tab]);
+
+  // Стабильные колбэки: экраны обёрнуты в memo и не перерисовываются, когда открывается шторка и т. п.
+  const openCategory = useCallback((c: string) => { setFilter(c); scrollByTab.current.list = 0; switchTab('list', true); }, [switchTab]);
+  const openAll = useCallback(() => { setFilter(''); switchTab('list', true); }, [switchTab]);
+  const openBudgets = useCallback(() => switchTab('budgets'), [switchTab]);
+
+  // Фоном подгружаем аналитику, чтобы первый переход на неё был мгновенным.
+  useEffect(() => { const id = setTimeout(loadAnalytics, 1500); return () => clearTimeout(id); }, []);
 
   const txs = useMemo(() => (data ? countable(data) : []), [data]);
   const now = monthKey(new Date());
@@ -68,11 +103,11 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
     );
   }
 
-  const openCategory = (c: string) => { setFilter(c); setTab('list'); };
+
 
   return (
     <div className="mx-auto min-h-full max-w-lg">
-      <header className="pt-safe sticky top-0 z-20 bg-bg/85 px-4 pb-2 backdrop-blur-xl">
+      <header className="pt-safe sticky top-0 z-20 bg-bg px-4 pb-2">
         <div className="flex items-center justify-between pt-1">
           <h1 className="text-[28px] font-bold tracking-tight">{TITLES[tab]}</h1>
           <div className="flex items-center gap-1">
@@ -91,24 +126,30 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
       </header>
 
       <main className="px-4 pt-2 pb-32">
-        <AnimatePresence mode="wait">
-          <motion.div key={tab} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.18 }}>
-            {tab === 'home' && (
-              <Home data={data} txs={txs} month={month} onCategory={openCategory} onTx={setEditing}
-                onAll={() => { setFilter(''); setTab('list'); }} onBudgets={() => setTab('budgets')} />
-            )}
-            {tab === 'list' && <Transactions data={data} month={month} category={filter} onCategory={setFilter} onTx={setEditing} />}
-            {tab === 'stats' && (
-              <Suspense fallback={<div className="flex justify-center py-20"><RefreshCw className="animate-spin text-ink-3" /></div>}>
-                <Analytics txs={txs} month={month} onMonth={setMonth} onCategory={openCategory} />
-              </Suspense>
-            )}
-            {tab === 'budgets' && <Budgets data={data} txs={txs} month={month} onEdit={setBudgetFor} />}
-          </motion.div>
-        </AnimatePresence>
+        <TabPanel active={tab === 'home'}>
+          <Home data={data} txs={txs} month={month} onCategory={openCategory} onTx={setEditing}
+            onAll={openAll} onBudgets={openBudgets} />
+        </TabPanel>
+        {visited.current.has('list') && (
+          <TabPanel active={tab === 'list'}>
+            <Transactions data={data} month={month} category={filter} onCategory={setFilter} onTx={setEditing} />
+          </TabPanel>
+        )}
+        {visited.current.has('stats') && (
+          <TabPanel active={tab === 'stats'}>
+            <Suspense fallback={<div className="flex justify-center py-20"><RefreshCw className="animate-spin text-ink-3" /></div>}>
+              <Analytics txs={txs} month={month} active={tab === 'stats'} onMonth={setMonth} onCategory={openCategory} />
+            </Suspense>
+          </TabPanel>
+        )}
+        {visited.current.has('budgets') && (
+          <TabPanel active={tab === 'budgets'}>
+            <Budgets data={data} txs={txs} month={month} onEdit={setBudgetFor} />
+          </TabPanel>
+        )}
       </main>
 
-      <BottomNav tab={tab} onTab={t => { if (t !== 'list') setFilter(''); setTab(t); }} onAdd={() => setAdding(true)} />
+      <BottomNav tab={tab} onTab={switchTab} onAdd={() => setAdding(true)} />
 
       <EditCategorySheet
         tx={editing} categories={data.categories} onClose={() => setEditing(null)}

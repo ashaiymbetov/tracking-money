@@ -1,4 +1,4 @@
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, useDragControls } from 'motion/react';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import clsx from 'clsx';
 import { useEffect, type ReactNode } from 'react';
@@ -43,6 +43,7 @@ export function MonthSwitcher({ value, onChange, min, max }: { value: MonthKey; 
 
 /** Нижняя шторка в стиле iOS: тянется вниз, чтобы закрыть. */
 export function Sheet({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
+  const drag = useDragControls();
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -55,26 +56,31 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
       {open && (
         <>
           <motion.div
-            className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px]"
+            className="fixed inset-0 z-40 bg-black/45"
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             onClick={onClose}
           />
           <motion.div
             role="dialog" aria-label={title}
-            className="pb-safe fixed inset-x-0 bottom-0 z-50 mx-auto max-h-[88dvh] max-w-lg overflow-y-auto rounded-t-[28px] bg-surface px-4 pt-2"
+            className="pb-safe fixed inset-x-0 bottom-0 z-50 mx-auto flex max-h-[88dvh] max-w-lg flex-col rounded-t-[28px] bg-surface will-change-transform"
             initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
-            transition={{ type: 'spring', damping: 32, stiffness: 340 }}
-            drag="y" dragConstraints={{ top: 0, bottom: 0 }} dragElastic={{ top: 0, bottom: 0.6 }}
-            onDragEnd={(_, info) => { if (info.offset.y > 120 || info.velocity.y > 600) onClose(); }}
+            transition={{ type: 'spring', damping: 34, stiffness: 380, mass: 0.8 }}
+            drag="y" dragListener={false} dragControls={drag}
+            dragConstraints={{ top: 0, bottom: 0 }} dragElastic={{ top: 0, bottom: 0.6 }}
+            onDragEnd={(_, info) => { if (info.offset.y > 110 || info.velocity.y > 500) onClose(); }}
           >
-            <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-line" />
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-semibold">{title}</h3>
-              <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-2 text-ink-2" aria-label="Закрыть">
-                <X size={16} />
-              </button>
+            {/* Тянуть вниз можно за верхнюю часть; содержимое ниже прокручивается как обычно. */}
+            <div className="shrink-0 cursor-grab touch-none px-4 pt-2" onPointerDown={e => drag.start(e)}>
+              <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-line" />
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="text-lg font-semibold">{title}</h3>
+                <button onClick={onClose} onPointerDown={e => e.stopPropagation()}
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-2 text-ink-2" aria-label="Закрыть">
+                  <X size={16} />
+                </button>
+              </div>
             </div>
-            {children}
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4">{children}</div>
           </motion.div>
         </>
       )}

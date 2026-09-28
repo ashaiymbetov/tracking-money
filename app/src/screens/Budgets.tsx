@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Plus } from 'lucide-react';
 import { Card, Empty } from '../components/ui';
 import { BudgetMeter } from '../components/charts';
@@ -6,7 +7,7 @@ import { formatMoney } from '../lib/format';
 import { byCategory, daysInMonth, inMonth, summarize, type MonthKey } from '../lib/stats';
 import type { AppData, Transaction } from '../lib/types';
 
-export function Budgets({ data, txs, month, onEdit }: {
+export const Budgets = memo(function Budgets({ data, txs, month, onEdit }: {
   data: AppData; txs: Transaction[]; month: MonthKey; onEdit: (category: string) => void;
 }) {
   const s = summarize(txs, month);
@@ -47,4 +48,4 @@ export function Budgets({ data, txs, month, onEdit }: {
       </Card>
     </div>
   );
-}
+});

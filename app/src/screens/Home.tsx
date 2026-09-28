@@ -1,5 +1,5 @@
+import { memo } from 'react';
 import { TrendingDown, TrendingUp } from 'lucide-react';
-import { motion } from 'motion/react';
 import { Card, Empty } from '../components/ui';
 import { BudgetMeter, CategoryBars } from '../components/charts';
 import { TxRow } from '../components/TxRow';
@@ -7,7 +7,7 @@ import { formatMoney, monthName, pluralOps } from '../lib/format';
 import { byCategory, daysInMonth, inMonth, sameMonth, monthKey, summarize, type MonthKey } from '../lib/stats';
 import type { AppData, Transaction } from '../lib/types';
 
-export function Home({ data, txs, month, onCategory, onTx, onAll, onBudgets }: {
+export const Home = memo(function Home({ data, txs, month, onCategory, onTx, onAll, onBudgets }: {
   data: AppData;
   txs: Transaction[];           // уже без «Не учитывать»
   month: MonthKey;
@@ -25,12 +25,11 @@ export function Home({ data, txs, month, onCategory, onTx, onAll, onBudgets }: {
 
   return (
     <div className="space-y-3">
-      <motion.section
-        initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+      <section
         className="relative overflow-hidden rounded-[28px] p-5 text-white"
-        style={{ background: 'linear-gradient(135deg, var(--hero-from), var(--hero-to))' }}
+        // Блик — радиальный градиент, а не filter: blur (он дорогой для GPU iPhone при прокрутке).
+        style={{ background: 'radial-gradient(circle at 92% -8%, rgb(255 255 255 / 0.16), transparent 42%), linear-gradient(135deg, var(--hero-from), var(--hero-to))' }}
       >
-        <div className="pointer-events-none absolute -right-10 -top-16 h-48 w-48 rounded-full bg-white/10 blur-2xl" />
         <div className="text-[13px] font-medium text-white/75">Потрачено за {monthName(month.month).toLowerCase()}</div>
         <div className="mt-1 text-[48px] font-semibold leading-none tracking-tight">{formatMoney(s.total)}</div>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-[13px]">
@@ -48,7 +47,7 @@ export function Home({ data, txs, month, onCategory, onTx, onAll, onBudgets }: {
             ? <Stat label="Прогноз на месяц" value={formatMoney(s.forecast)} />
             : <Stat label="Прошлый месяц" value={formatMoney(s.prevToDate)} />}
         </div>
-      </motion.section>
+      </section>
 
       <Card title="По категориям">
         {cats.length ? <CategoryBars items={cats} onPick={onCategory} limit={6} /> : <Empty>В этом месяце трат пока нет</Empty>}
@@ -74,11 +73,11 @@ export function Home({ data, txs, month, onCategory, onTx, onAll, onBudgets }: {
       </Card>
     </div>
   );
-}
+});
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl bg-white/12 px-3 py-2.5 backdrop-blur-sm">
+    <div className="rounded-2xl bg-white/12 px-3 py-2.5">
       <div className="text-[12px] text-white/70">{label}</div>
       <div className="text-[17px] font-semibold">{value}</div>
     </div>

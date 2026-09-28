@@ -76,7 +76,20 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
-  overscroll-behavior-y: none;
+  text-rendering: optimizeLegibility;
+}
+/* Без задержки и двойного тапа-зума на кнопках; долгое нажатие не выделяет текст. */
+button, a, [role="switch"] {
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* Длинная лента: браузер не рисует карточки дней за пределами экрана. */
+.cv-auto { content-visibility: auto; contain-intrinsic-size: auto 260px; }
+.scroll-x { overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity; }
+.scroll-x > * { scroll-snap-align: start; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
 }
 .tnum { font-variant-numeric: tabular-nums; }
 .pt-safe { padding-top: max(env(safe-area-inset-top), 12px); }

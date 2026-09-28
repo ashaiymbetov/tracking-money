@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Card, Empty } from '../components/ui';
 import { CategoryBars } from '../components/charts';
 import { DailyChart, MonthlyChart } from '../components/TimeCharts';
@@ -6,9 +7,10 @@ import { formatMoney } from '../lib/format';
 import { byCategory, byDay, byMerchant, byMonth, inMonth, monthKey, summarize, type MonthKey } from '../lib/stats';
 import type { Transaction } from '../lib/types';
 
-export function Analytics({ txs, month, onMonth, onCategory }: {
+export const Analytics = memo(function Analytics({ txs, month, active, onMonth, onCategory }: {
   txs: Transaction[];
   month: MonthKey;
+  active: boolean;
   onMonth: (k: MonthKey) => void;
   onCategory: (c: string) => void;
 }) {
@@ -34,11 +36,11 @@ export function Analytics({ txs, month, onMonth, onCategory }: {
           <span className="inline-block h-px w-4 bg-ink-2" /> в среднем {formatMoney(s.perDay)}
         </span>
       ) : undefined}>
-        {monthTx.length ? <DailyChart data={days} month={month} average={s.perDay} /> : <Empty>Нет данных</Empty>}
+        {!monthTx.length ? <Empty>Нет данных</Empty> : active ? <DailyChart data={days} month={month} average={s.perDay} /> : <div className="h-48" />}
       </Card>
 
       <Card title="По месяцам">
-        <MonthlyChart data={byMonth(txs, monthKey(new Date()), 12)} selected={month} onSelect={onMonth} />
+        {active ? <MonthlyChart data={byMonth(txs, monthKey(new Date()), 12)} selected={month} onSelect={onMonth} /> : <div className="h-48" />}
       </Card>
 
       <Card title="Все категории">
@@ -63,7 +65,7 @@ export function Analytics({ txs, month, onMonth, onCategory }: {
       </Card>
     </div>
   );
-}
+});
 
 function Tile({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (

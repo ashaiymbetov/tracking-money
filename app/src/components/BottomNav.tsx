@@ -20,13 +20,16 @@ export function BottomNav({ tab, onTab, onAdd }: { tab: Tab; onTab: (t: Tab) => 
         tab === t.id ? 'text-accent' : 'text-ink-3')}
       aria-current={tab === t.id ? 'page' : undefined}
     >
-      {tab === t.id && <motion.span layoutId="nav-pill" className="absolute inset-x-3 inset-y-0 -z-10 rounded-2xl bg-accent-soft/60" />}
+      {tab === t.id && (
+        <motion.span layoutId="nav-pill" transition={{ type: 'spring', stiffness: 520, damping: 38 }}
+          className="absolute inset-x-3 inset-y-0 -z-10 rounded-2xl bg-accent-soft/60" />
+      )}
       <t.Icon size={22} strokeWidth={tab === t.id ? 2.4 : 2} />
       {t.label}
     </button>
   );
   return (
-    <nav className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/85 backdrop-blur-xl">
+    <nav className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/90 backdrop-blur-lg backdrop-saturate-150 [transform:translateZ(0)]">
       <div className="mx-auto flex max-w-lg items-center px-2 pt-1.5">
         {TABS.slice(0, 2).map(item)}
         <button

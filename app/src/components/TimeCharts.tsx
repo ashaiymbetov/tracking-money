@@ -34,7 +34,7 @@ export function DailyChart({ data, month, average }: { data: DayTotal[]; month: 
           {average > 0 && (
             <ReferenceLine y={average} stroke="var(--ink-2)" strokeWidth={1} />
           )}
-          <Bar dataKey="total" fill="var(--accent)" radius={[4, 4, 0, 0]} maxBarSize={24} isAnimationActive />
+          <Bar dataKey="total" fill="var(--accent)" radius={[4, 4, 0, 0]} maxBarSize={24} animationDuration={450} animationEasing="ease-out" />
         </BarChart>
       </ResponsiveContainer>
     </div>
@@ -58,7 +58,7 @@ export function MonthlyChart({ data, selected, onSelect }: { data: MonthTotal[];
                 <TooltipBox title={`${monthName(payload[0].payload.month)} ${payload[0].payload.year}`} value={formatMoney(Number(payload[0].value))} />
               ) : null}
           />
-          <Bar dataKey="total" radius={[4, 4, 0, 0]} maxBarSize={24}
+          <Bar dataKey="total" radius={[4, 4, 0, 0]} maxBarSize={24} animationDuration={450} animationEasing="ease-out"
             onClick={(entry) => { const p = (entry as unknown as { payload: MonthTotal }).payload; onSelect({ year: p.year, month: p.month }); }}>
             {rows.map(m => (
               <Cell key={`${m.year}-${m.month}`} cursor="pointer"

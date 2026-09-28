@@ -3,6 +3,23 @@ import { CategoryBadge } from '../lib/categories';
 import { formatMoney } from '../lib/format';
 import type { CategoryTotal } from '../lib/stats';
 
+/**
+ * Заполнение полоски. Анимируем clip-path, а не width: без пересчёта раскладки на каждом кадре,
+ * и скруглённый конец не сплющивается (как было бы со scaleX).
+ */
+function Fill({ ratio, color, delay = 0 }: { ratio: number; color: string; delay?: number }) {
+  const cut = `inset(0 ${(100 - Math.max(0, Math.min(1, ratio)) * 100).toFixed(2)}% 0 0 round 999px)`;
+  return (
+    <motion.span
+      className="block h-full w-full rounded-full"
+      style={{ background: color }}
+      initial={{ clipPath: 'inset(0 100% 0 0 round 999px)' }}
+      animate={{ clipPath: cut }}
+      transition={{ duration: 0.55, delay, ease: [0.22, 1, 0.36, 1] }}
+    />
+  );
+}
+
 /** Категории по убыванию: иконка, сумма, доля и полоска одного цвета. */
 export function CategoryBars({ items, onPick, limit }: { items: CategoryTotal[]; onPick?: (c: string) => void; limit?: number }) {
   const max = items[0]?.total || 1;
@@ -19,12 +36,8 @@ export function CategoryBars({ items, onPick, limit }: { items: CategoryTotal[];
                 <span className="tnum shrink-0 text-[15px] font-semibold">{formatMoney(c.total)}</span>
               </span>
               <span className="mt-1.5 flex items-center gap-2">
-                <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-2">
-                  <motion.span
-                    className="block h-full rounded-full bg-accent"
-                    initial={{ width: 0 }} animate={{ width: `${(c.total / max) * 100}%` }}
-                    transition={{ duration: 0.6, delay: i * 0.04, ease: [0.22, 1, 0.36, 1] }}
-                  />
+                <span className="h-1.5 flex-1 rounded-full bg-surface-2">
+                  <Fill ratio={c.total / max} color="var(--accent)" delay={i * 0.04} />
                 </span>
                 <span className="tnum w-10 shrink-0 text-right text-[12px] text-ink-3">{Math.round(c.share * 100)}%</span>
               </span>
@@ -55,9 +68,8 @@ export function BudgetMeter({ category, spent, limit, projected, onClick }: {
               <span className="font-semibold text-ink">{formatMoney(spent)}</span> из {formatMoney(limit)}
             </span>
           </div>
-          <div className="mt-1.5 h-2 overflow-hidden rounded-full" style={{ background: 'color-mix(in oklab, ' + fill + ' 18%, transparent)' }}>
-            <motion.div className="h-full rounded-full" style={{ background: fill }}
-              initial={{ width: 0 }} animate={{ width: `${Math.min(ratio, 1) * 100}%` }} transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }} />
+          <div className="mt-1.5 h-2 rounded-full" style={{ background: 'color-mix(in oklab, ' + fill + ' 18%, transparent)' }}>
+            <Fill ratio={Math.min(ratio, 1)} color={fill} />
           </div>
           <div className="mt-1 text-[12px] text-ink-3">
             {state === 'over' ? `⛔ Превышен на ${formatMoney(-left)}`

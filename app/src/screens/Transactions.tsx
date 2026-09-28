@@ -1,13 +1,13 @@
 import { Search, X } from 'lucide-react';
 import clsx from 'clsx';
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Card, Empty } from '../components/ui';
 import { TxRow } from '../components/TxRow';
 import { formatDayHeader, formatMoney } from '../lib/format';
 import { groupByDay, inMonth, type MonthKey } from '../lib/stats';
 import type { AppData, Transaction } from '../lib/types';
 
-export function Transactions({ data, month, category, onCategory, onTx }: {
+export const Transactions = memo(function Transactions({ data, month, category, onCategory, onTx }: {
   data: AppData;
   month: MonthKey;
   category: string;
@@ -35,7 +35,7 @@ export function Transactions({ data, month, category, onCategory, onTx }: {
         {q && <button onClick={() => setQ('')} aria-label="Очистить"><X size={18} className="text-ink-3" /></button>}
       </div>
 
-      <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4">
+      <div className="no-scrollbar scroll-x -mx-4 flex gap-2 overflow-x-auto px-4 scroll-px-4">
         {['', ...present].map(c => (
           <button key={c || 'all'} onClick={() => onCategory(c)}
             className={clsx('shrink-0 rounded-full px-3.5 py-1.5 text-[13px] font-medium transition',
@@ -53,7 +53,7 @@ export function Transactions({ data, month, category, onCategory, onTx }: {
 
       {groups.length === 0 && <Card><Empty>Ничего не найдено</Empty></Card>}
       {groups.map(g => (
-        <Card key={g.key} className="!py-3">
+        <Card key={g.key} className="cv-auto !py-3">
           <div className="mb-1 flex items-baseline justify-between px-1">
             <span className="text-[13px] font-semibold text-ink-2">{formatDayHeader(g.date)}</span>
             <span className="tnum text-[13px] text-ink-3">{formatMoney(g.total)}</span>
@@ -63,4 +63,4 @@ export function Transactions({ data, month, category, onCategory, onTx }: {
       ))}
     </div>
   );
-}
+});
