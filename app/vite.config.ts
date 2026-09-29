@@ -35,7 +35,9 @@ export default defineConfig({
       workbox: {
         // Данные всегда берём из сети (Apps Script), кэшируем только само приложение.
         navigateFallback: 'index.html',
-        globPatterns: ['**/*.{js,css,html,svg,png,woff2}']
+        globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        // pdf.js (~1,8 МБ) нужен только для импорта выписки — не кладём его в офлайн-кэш при установке
+        globIgnores: ['**/pdf*.{js,mjs}', '**/statement-*.js']
       }
     })
   ],

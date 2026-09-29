@@ -1,9 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { LogOut, RefreshCw, Settings } from 'lucide-react';
+import { FileUp, LogOut, RefreshCw, Settings } from 'lucide-react';
 import clsx from 'clsx';
 import { BottomNav, type Tab } from './components/BottomNav';
 import { MonthSwitcher, Sheet, Toast } from './components/ui';
 import { AddExpenseSheet, BudgetSheet, EditCategorySheet } from './components/sheets';
+import { ImportSheet } from './components/ImportSheet';
 import { Home } from './screens/Home';
 import { Transactions } from './screens/Transactions';
 import { Budgets } from './screens/Budgets';
@@ -59,6 +60,7 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
   const [adding, setAdding] = useState(false);
   const [budgetFor, setBudgetFor] = useState<string | null>(null);
   const [settings, setSettings] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const setCategory = useSetCategory(conn);
@@ -192,10 +194,15 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
           {conn.demo ? 'Сейчас показаны демо-данные.' : <>Подключено к таблице.<br /><span className="break-all text-ink-3">{conn.url}</span></>}
           {data && <div className="mt-2 text-ink-3">Обновлено: {new Date(data.generatedAt).toLocaleString('ru-RU')}</div>}
         </div>
+        <button onClick={() => { setSettings(false); setImporting(true); }}
+          className="mb-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-accent py-3.5 font-semibold text-white">
+          <FileUp size={18} /> Импорт выписки (PDF)
+        </button>
         <button onClick={onLogout} className="mb-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-surface-2 py-3.5 font-semibold text-critical">
           <LogOut size={18} /> {conn.demo ? 'Подключить свою таблицу' : 'Отключить'}
         </button>
       </Sheet>
+      <ImportSheet open={importing} conn={conn} onClose={() => setImporting(false)} onImported={() => query.refetch()} notify={notify} />
       <Toast text={toast} />
     </div>
   );

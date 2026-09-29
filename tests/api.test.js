@@ -20,6 +20,7 @@ function fakeSheet(name, rows) {
     },
     appendRow: row => s.rows.push(row),
     insertRowBefore: r => s.rows.splice(r - 1, 0, []),
+    insertRowsBefore: (r, n) => s.rows.splice(r - 1, 0, ...Array.from({ length: n }, () => [])),
     deleteRow: r => s.rows.splice(r - 1, 1),
     setFrozenRows() {}
   };
@@ -121,4 +122,46 @@ test('пустой OCR-текст — понятная ошибка без вы�
   assert.equal(r.ok, false);
   assert.match(r.message, /текста/);
   assert.equal(sent.length, 0);
+});
+
+test('import: дубли с Apple Pay отсекаются, категории по правилам и маршрутке, повторный импорт ничего не добавляет', () => {
+  const { ctx, sheets } = load();
+  const tx = sheets['Транзакции'].rows;
+  const applePayTime = new Date('2026-09-28T13:05:00+06:00');
+  tx.push([applePayTime, 102, 'KGS', 'Globus Express', 'Продукты', 'Simbank', 'apple-pay', '{}']);
+  const post = b => res(ctx.doPost({ postData: { contents: JSON.stringify({ token: 'secret', ...b }) } }));
+  const rows = [
+    { date: '2026-09-28T13:08:12+06:00', amount: 102, merchant: 'Globus', method: 'card', recipient: 'business' },   // дубль Apple Pay (3 мин)
+    { date: '2026-09-28T13:09:40+06:00', amount: 102, merchant: 'Globus', method: 'card', recipient: 'business' },   // вторая такая же покупка — не дубль
+    { date: '2026-09-28T18:00:00+06:00', amount: 45, merchant: 'Асан Б.', method: 'qr', recipient: 'person' },        // маршрутка
+    { date: '2026-09-28T19:00:00+06:00', amount: 210, merchant: 'Комиссия Simbank', method: 'other', recipient: 'business', category: 'Кредит и комиссии' },
+    { date: '2026-09-28T20:00:00+06:00', amount: 999, merchant: 'Непонятное место', method: 'card', recipient: 'business' }
+  ];
+  const r1 = post({ action: 'import', bank: 'Simbank', card: 'Simbank', rows });
+  assert.equal(r1.ok, true);
+  assert.equal(r1.added, 4);
+  assert.equal(r1.duplicates, 1);
+  assert.equal(r1.uncategorized, 1);                     // только «Непонятное место»: Globus есть в правилах
+  const added = tx.slice(-4);
+  assert.deepEqual(added.map(r => r[4]), ['Продукты', 'Транспорт', 'Кредит и комиссии', 'Без категории']);
+  const r2 = post({ action: 'import', bank: 'Simbank', card: 'Simbank', rows });
+  assert.equal(r2.added, 0);
+  assert.equal(r2.duplicates, 5);
+});
+
+test('categorizeUnknown: один запрос к Claude, категории проставлены и запомнены правилами', () => {
+  const reply = { stop_reason: 'end_turn', usage: { input_tokens: 400, output_tokens: 120 },
+    content: [{ type: 'text', text: JSON.stringify({ items: [{ merchant: 'Азия', category: 'Продукты' }, { merchant: 'Шоро', category: 'Кафе и еда' }] }) }] };
+  const { ctx, sheets, sent } = loadWithClaude(reply);
+  const tx = sheets['Транзакции'].rows;
+  tx.push([new Date(), 200, 'KGS', 'Азия', 'Без категории', '', 'statement', '{}']);
+  tx.push([new Date(), 50, 'KGS', 'Шоро', 'Без категории', '', 'statement', '{}']);
+  tx.push([new Date(), 70, 'KGS', 'Азия', 'Без категории', '', 'statement', '{}']);
+  const r = res(ctx.doPost({ postData: { contents: JSON.stringify({ token: 'secret', action: 'categorizeUnknown' }) } }));
+  assert.equal(r.ok, true, r.message);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].messages[0].content[0].text, /1\. Азия\n2\. Шоро/);
+  assert.deepEqual(tx.slice(-3).map(x => x[4]), ['Продукты', 'Кафе и еда', 'Продукты']);
+  assert.equal(r.updated, 3);
+  assert.deepEqual(sheets['Правила'].rows.slice(1, 3), [['азия', 'Продукты'], ['шоро', 'Кафе и еда']]);
 });

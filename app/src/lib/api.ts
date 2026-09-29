@@ -1,5 +1,6 @@
 import type { AppData, Connection } from './types';
 import { demoData, demoMutate } from './demo';
+import type { StatementExpense } from './statement';
 
 export class ApiError extends Error {}
 
@@ -69,3 +70,12 @@ export const setBudget = (c: Connection, category: string, limit: number) =>
 
 export const addExpense = (c: Connection, amount: number, merchant: string, category: string) =>
   post(c, { amount, merchant, category, source: 'app', currency: 'KGS' });
+
+export interface ImportResult extends PostResult { added?: number; duplicates?: number; uncategorized?: number }
+export interface CategorizeResult extends PostResult { updated?: number; rules?: number }
+
+export const importStatement = (c: Connection, bank: string, rows: StatementExpense[]) =>
+  post(c, { action: 'import', bank, card: bank, rows }) as Promise<ImportResult>;
+
+export const categorizeUnknown = (c: Connection) =>
+  post(c, { action: 'categorizeUnknown' }) as Promise<CategorizeResult>;

@@ -9,7 +9,7 @@
  *   4. В iPhone настрой автоматизацию «Транзакция», которая шлёт POST на этот URL.
  */
 
-var SCRIPT_VERSION = '2026-09-29-merchant';  // видно по GET-запросу на URL скрипта — так проверяем, что развёрнута свежая версия
+var SCRIPT_VERSION = '2026-09-29-import';  // видно по GET-запросу на URL скрипта — так проверяем, что развёрнута свежая версия
 var SHEET_TX = 'Транзакции';
 var SHEET_RULES = 'Правила';
 var SHEET_SUMMARY = 'Сводка';
@@ -112,6 +112,8 @@ function doPost(e) {
     try {
       var result = body.action === 'setCategory' ? setCategory_(body)
         : body.action === 'setBudget' ? setBudget_(body)
+        : body.action === 'import' ? importRows_(body)
+        : body.action === 'categorizeUnknown' ? categorizeUnknown_()
         : addTransaction_(body);
       return json_(result);
     } finally {
@@ -212,6 +214,131 @@ function setCategory_(body) {
     recategorize_(false);
   }
   return { ok: true, message: merchant + ' → ' + category };
+}
+
+var IMPORT_DUP_WINDOW_MS = 15 * 60 * 1000;
+
+/**
+ * Импорт операций из выписки (приложение разбирает PDF на телефоне и присылает готовые строки).
+ * Дубли с уже записанными (Apple Pay, скрины, прошлый импорт) — та же сумма в пределах 15 минут;
+ * каждая записанная строка «гасит» не больше одной импортируемой, чтобы две одинаковые покупки подряд не пропали.
+ */
+function importRows_(body) {
+  var rows = Array.isArray(body.rows) ? body.rows.slice(0, 5000) : [];
+  if (!rows.length) return { ok: false, error: 'нет строк', message: '⚠️ В выписке не нашлось операций' };
+  var ss = getSpreadsheet_();
+  var sheet = ss.getSheetByName(SHEET_TX);
+  var rules = loadRules_(ss);
+  var fareMax = loadSettings_(ss).fareMax;
+
+  var existing = {};
+  var last = sheet.getLastRow();
+  if (last >= 2) {
+    sheet.getRange(2, 1, last - 1, 2).getValues().forEach(function (r) {
+      if (!isDate_(r[0]) || isNaN(Number(r[1]))) return;
+      var key = Number(r[1]).toFixed(2);
+      (existing[key] = existing[key] || []).push(r[0].getTime());
+    });
+  }
+
+  var out = [];
+  var duplicates = 0;
+  var uncategorized = 0;
+  rows.forEach(function (r) {
+    var amount = Math.abs(Number(r.amount));
+    var date = new Date(r.date);
+    if (!(amount > 0) || isNaN(date.getTime())) return;
+    var times = existing[amount.toFixed(2)];
+    if (times) {
+      for (var i = 0; i < times.length; i++) {
+        if (Math.abs(times[i] - date.getTime()) <= IMPORT_DUP_WINDOW_MS) { times.splice(i, 1); duplicates++; return; }
+      }
+    }
+    var merchant = normalizeMerchant(r.merchant);
+    var category = cleanText(r.category) || categorize(merchant, rules);
+    if (category === UNCATEGORIZED && isFare('payment', r.recipient || '', amount, fareMax)) category = TRANSPORT;
+    if (category === UNCATEGORIZED) uncategorized++;
+    out.push([date, amount, DEFAULT_CURRENCY, merchant, category, cleanText(body.card), 'statement',
+      JSON.stringify({ bank: cleanText(body.bank), method: r.method || '', recipient: r.recipient || '' })]);
+  });
+  out.sort(function (a, b) { return a[0] - b[0]; });
+  if (out.length) sheet.getRange(sheet.getLastRow() + 1, 1, out.length, out[0].length).setValues(out);
+  return {
+    ok: true, added: out.length, duplicates: duplicates, uncategorized: uncategorized,
+    message: 'Добавлено ' + out.length + ', уже было ' + duplicates + (uncategorized ? ', без категории ' + uncategorized : '')
+  };
+}
+
+/**
+ * Разовый разбор «Без категории» через Claude: один запрос на все уникальные названия (≈ 3 цента за ~80 мест).
+ * Ответ запоминается правилами — дальше эти места определяются бесплатно.
+ */
+function categorizeUnknown_() {
+  var ss = getSpreadsheet_();
+  var sheet = ss.getSheetByName(SHEET_TX);
+  var last = sheet.getLastRow();
+  if (last < 2) return { ok: true, updated: 0, message: 'Нечего разбирать' };
+  var range = sheet.getRange(2, 4, last - 1, 2);
+  var values = range.getValues();
+  var seen = {};
+  var merchants = [];
+  values.forEach(function (r) {
+    var m = cleanText(r[0]);
+    if (m && r[1] === UNCATEGORIZED && !seen[m.toLowerCase()] && merchants.length < 150) { seen[m.toLowerCase()] = true; merchants.push(m); }
+  });
+  if (!merchants.length) return { ok: true, updated: 0, message: 'Все операции уже с категориями' };
+
+  var categories = loadCategories_(ss).filter(function (c) { return c !== EXCLUDED; });
+  var schema = {
+    type: 'object',
+    properties: {
+      items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: { merchant: { type: 'string' }, category: { type: 'string', enum: categories } },
+          required: ['merchant', 'category'],
+          additionalProperties: false
+        }
+      }
+    },
+    required: ['items'],
+    additionalProperties: false
+  };
+  var prompt = [
+    'Assign a spending category to each merchant from a Kyrgyz (Bishkek) bank statement.',
+    'Private persons («Айбек К.», full names) → «Переводы». Supermarkets/grocery chains (Globus/Глобус, Азия, Достор, Народный, Фрунзе) → «Продукты».',
+    'Cafés, canteens, pizza, coffee, Shoro kiosks → «Кафе и еда». Scooter/bike rentals and buses → «Транспорт». Taxi → «Такси».',
+    '«Коммуналка» = electricity, water, gas, heating, housing fees; «Связь» = mobile/internet. If unsure → «' + UNCATEGORIZED + '».',
+    'Return every merchant exactly as given.',
+    '',
+    merchants.map(function (m, i) { return (i + 1) + '. ' + m; }).join('\n')
+  ].join('\n');
+
+  var ai = callClaudeWith_([{ type: 'text', text: prompt }], schema, 8000);
+  var map = {};
+  (ai.data.items || []).forEach(function (it) {
+    if (it && it.merchant && it.category && it.category !== UNCATEGORIZED) map[cleanText(it.merchant).toLowerCase()] = it.category;
+  });
+
+  var updated = 0;
+  values.forEach(function (r) {
+    var c = map[cleanText(r[0]).toLowerCase()];
+    if (r[1] === UNCATEGORIZED && c) { r[1] = c; updated++; }
+  });
+  range.setValues(values);
+
+  // Запоминаем правилами (новые — сверху, чтобы были главнее общих).
+  var newRules = Object.keys(map).map(function (m) { return [m, map[m]]; });
+  if (newRules.length) {
+    var rulesSheet = ss.getSheetByName(SHEET_RULES);
+    rulesSheet.insertRowsBefore(2, newRules.length);
+    rulesSheet.getRange(2, 1, newRules.length, 2).setValues(newRules);
+  }
+  return {
+    ok: true, updated: updated, rules: newRules.length, tokens: ai.usage,
+    message: 'Разобрано ' + updated + ' операций, запомнено ' + newRules.length + ' мест'
+  };
 }
 
 /** Лимит на категорию в месяц; limit 0 — убрать. */
@@ -345,14 +472,18 @@ function extractionPrompt_(categories, source) {
 
 /** Отправляет содержимое в Claude; возвращает { data: объект по EXTRACTION_SCHEMA, usage: токены }. */
 function callClaude_(content) {
+  return callClaudeWith_(content, EXTRACTION_SCHEMA, 4000);
+}
+
+function callClaudeWith_(content, schema, maxTokens) {
   var apiKey = PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('Не задан ANTHROPIC_API_KEY в свойствах скрипта');
 
   var payload = {
     model: CLAUDE_MODEL,
-    max_tokens: 4000,
+    max_tokens: maxTokens,
     fallbacks: 'default',
-    output_config: { effort: 'low', format: { type: 'json_schema', schema: EXTRACTION_SCHEMA } },
+    output_config: { effort: 'low', format: { type: 'json_schema', schema: schema } },
     messages: [{ role: 'user', content: content }]
   };
 
@@ -492,7 +623,7 @@ function loadCategories_(ss) {
     var c = cleanText(r[1]);
     if (c && !seen[c]) { seen[c] = true; list.push(c); }
   });
-  [TRANSPORT, 'Переводы', 'Семья', 'Коммуналка', 'Одежда', 'Дом', 'Другое'].forEach(function (c) {
+  [TRANSPORT, 'Переводы', 'Семья', 'Коммуналка', 'Одежда', 'Дом', 'Кредит и комиссии', 'Другое'].forEach(function (c) {
     if (!seen[c]) { seen[c] = true; list.push(c); }
   });
   return list;

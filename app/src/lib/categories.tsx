@@ -1,6 +1,6 @@
 import {
   ArrowLeftRight, Bike, Bus, CarTaxiFront, CircleHelp, Clapperboard, Ellipsis, EyeOff, Fuel, HeartPulse,
-  House, Package, Repeat, Shirt, ShoppingBasket, Smartphone, Sofa, Users, UtensilsCrossed, Zap,
+  House, Landmark, Package, Repeat, Shirt, ShoppingBasket, Smartphone, Sofa, Users, UtensilsCrossed, Zap,
   type LucideIcon
 } from 'lucide-react';
 
@@ -22,6 +22,7 @@ const ICONS: Record<string, LucideIcon> = {
   'Одежда': Shirt,
   'Дом': Sofa,
   'Жильё': House,
+  'Кредит и комиссии': Landmark,
   'Другое': Ellipsis,
   'Без категории': CircleHelp,
   'Не учитывать': EyeOff
