@@ -41,6 +41,8 @@ export default defineConfig({
       }
     })
   ],
+  // Воркер pdf.js — ES-модуль (new Worker(..., { type: 'module' })), Safari это умеет с 15-й версии.
+  worker: { format: 'es' },
   test: {
     environment: 'node'
   }

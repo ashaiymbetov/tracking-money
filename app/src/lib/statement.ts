@@ -177,18 +177,27 @@ export function summarizeStatement(parsed: { rows: StatementRow[]; period: strin
 
 /** Читает PDF в браузере (pdf.js грузится только здесь — отдельным чанком). */
 export async function readPdfPages(file: File | ArrayBuffer): Promise<PdfPage[]> {
+  await import('./streamPolyfill');                        // до pdf.js: нужен Safari на iOS 18
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const worker = await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url');
-  pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+  // Свой воркер: тот же pdf.js, но с полифилом внутри (в воркере свой глобальный объект).
+  const worker = new Worker(new URL('./pdf.worker.ts', import.meta.url), { type: 'module' });
+  pdfjs.GlobalWorkerOptions.workerPort = worker;
   const data = file instanceof ArrayBuffer ? file : await file.arrayBuffer();
-  const doc = await pdfjs.getDocument({ data: new Uint8Array(data) }).promise;
-  const pages: PdfPage[] = [];
-  for (let i = 1; i <= doc.numPages; i++) {
-    const page = await doc.getPage(i);
-    const content = await page.getTextContent();
-    pages.push(content.items.flatMap(it => ('str' in it
-      ? [{ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width }]
-      : [])));
+  const task = pdfjs.getDocument({ data: new Uint8Array(data) });
+  try {
+    const doc = await task.promise;
+    const pages: PdfPage[] = [];
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      const content = await page.getTextContent();
+      pages.push(content.items.flatMap(it => ('str' in it
+        ? [{ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width }]
+        : [])));
+    }
+    return pages;
+  } finally {
+    await task.destroy();
+    worker.terminate();
+    pdfjs.GlobalWorkerOptions.workerPort = null;
   }
-  return pages;
 }
