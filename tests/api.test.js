@@ -84,3 +84,41 @@ test('setBudget: создать, изменить, убрать', () => {
   assert.deepEqual({ ...post({ category: 'Кафе и еда', limit: 0 }).budgets }, {});
   assert.equal(sheets['Бюджеты'].rows.length, 1);
 });
+
+function loadWithClaude(reply) {
+  const env = load();
+  const sent = [];
+  env.ctx.PropertiesService = { getScriptProperties: () => ({ getProperty: k => ({ TOKEN: 'secret', ANTHROPIC_API_KEY: 'sk-test' })[k] ?? null }) };
+  env.ctx.UrlFetchApp = { fetch: (url, opt) => { sent.push(JSON.parse(opt.payload)); return { getResponseCode: () => 200, getContentText: () => JSON.stringify(reply) }; } };
+  return { ...env, sent };
+}
+
+test('текст скрина (OCR на iPhone) → Claude получает только текст, расход токенов пишется', () => {
+  const reply = {
+    stop_reason: 'end_turn', usage: { input_tokens: 612, output_tokens: 95 },
+    content: [{ type: 'text', text: JSON.stringify({ kind: 'transfer_out', method: 'qr', recipient: 'person', amount: 45, currency: 'KGS', merchant: 'Асан Б.', date: '2026-09-29T08:10', bank: 'O!Dengi', category: 'Переводы' }) }]
+  };
+  const { ctx, sheets, sent } = loadWithClaude(reply);
+  const ocr = 'Перевод выполнен\n45,00 с\nПолучатель: Асан Б.\n29.09.2026 08:10';
+  const r = res(ctx.doPost({ postData: { contents: JSON.stringify({ token: 'secret', text: ocr, source: 'screenshot' }) } }));
+  assert.equal(r.ok, true, r.message);
+  const content = sent[0].messages[0].content;
+  assert.equal(content.length, 1);
+  assert.equal(content[0].type, 'text');
+  assert.ok(content[0].text.includes('<receipt>') && content[0].text.includes('Асан Б.'));
+  const row = sheets['Транзакции'].rows.at(-1);
+  assert.equal(row[1], 45);
+  assert.equal(row[4], 'Транспорт');                       // правило маршрутки
+  const raw = JSON.parse(row[7]);
+  assert.equal(raw.ai_input, 'text');
+  assert.deepEqual({ ...raw.ai_tokens }, { in: 612, out: 95 });
+  assert.equal(raw.text, undefined);                         // сам текст в таблицу не пишем
+});
+
+test('пустой OCR-текст — понятная ошибка без вызова Claude', () => {
+  const { ctx, sent } = loadWithClaude({});
+  const r = res(ctx.doPost({ postData: { contents: JSON.stringify({ token: 'secret', text: '  ' }) } }));
+  assert.equal(r.ok, false);
+  assert.match(r.message, /текста/);
+  assert.equal(sent.length, 0);
+});

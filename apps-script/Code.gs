@@ -9,7 +9,7 @@
  *   4. В iPhone настрой автоматизацию «Транзакция», которая шлёт POST на этот URL.
  */
 
-var SCRIPT_VERSION = '2026-09-28-app';  // видно по GET-запросу на URL скрипта — так проверяем, что развёрнута свежая версия
+var SCRIPT_VERSION = '2026-09-29-ocr';  // видно по GET-запросу на URL скрипта — так проверяем, что развёрнута свежая версия
 var SHEET_TX = 'Транзакции';
 var SHEET_RULES = 'Правила';
 var SHEET_SUMMARY = 'Сводка';
@@ -92,11 +92,20 @@ function doPost(e) {
     }
 
     // Скриншот / чек: сначала распознаём через Claude (вне блокировки — это пара секунд).
-    if (body.image) {
-      var extracted = extractFromImage_(body.image, body.mime, loadCategories_(getSpreadsheet_()));
-      var decision = interpretExtraction(extracted, loadSettings_(getSpreadsheet_()).fareMax);
+    if ((body.text !== undefined && body.amount === undefined) || body.image) {
+      if (body.text !== undefined && !body.image && cleanText(body.text).length < 3) {
+        return fail_('iPhone не нашёл текста на скрине — открой чек и попробуй ещё раз');
+      }
+      var ss = getSpreadsheet_();
+      var ai = body.image
+        ? extractFromImage_(body.image, body.mime, loadCategories_(ss))
+        : extractFromText_(body.text, loadCategories_(ss));
+      var decision = interpretExtraction(ai.data, loadSettings_(ss).fareMax);
       if (!decision.record) return json_({ ok: true, skipped: true, message: decision.message });
+      var aiInput = body.image ? 'image' : 'text';
       body = mergeExtraction_(body, decision.tx);
+      body.ai_input = aiInput;          // что ушло в Claude — картинка или текст
+      body.ai_tokens = ai.usage;        // реальный расход: { in, out } токенов — видно в «Исходных данных»
     }
 
     var lock = LockService.getScriptLock();
@@ -313,43 +322,36 @@ var EXTRACTION_SCHEMA = {
   additionalProperties: false
 };
 
-function extractionPrompt_(categories) {
+/**
+ * Инструкция для Claude. На английском — так она занимает в несколько раз меньше токенов, чем на русском;
+ * значения (магазин, категория) Claude возвращает как в чеке и из списка категорий.
+ */
+function extractionPrompt_(categories, source) {
   return [
-    'Это скриншот или чек из мобильного банка в Кыргызстане (MBank, O!Bank, Simbank и т. п.).',
-    'Извлеки одну операцию:',
-    '- kind: payment — оплата покупки/услуги (в т. ч. по QR); transfer_out — перевод другому человеку;',
-    '  income — зачисление/поступление; transfer_in — входящий перевод; own_transfer — перевод между своими счетами;',
-    '  not_a_transaction — на изображении нет завершённой операции (ошибка, баланс, реклама и т. п.).',
-    '- method: qr — оплата/перевод по QR-коду (на чеке есть «QR», «по QR», «ELQR» и т. п.); phone_transfer — перевод',
-    '  по номеру телефона или карты; card — оплата картой; other — иное или непонятно.',
-    '- recipient: business — магазин, компания, ИП с названием; person — частное лицо (имя и фамилия, «Алтынбек А.»);',
-    '  self — сам владелец счёта (перевод себе); unknown — непонятно.',
-    '- amount: сумма операции положительным числом (без комиссии, если она указана отдельно); 0, если нет.',
-    '- currency: ISO-код (KGS, USD, RUB…); «сом» = KGS.',
-    '- merchant: получатель — название магазина/ИП/сервиса, либо имя человека для перевода. Без номера телефона и счёта.',
-    '- date: дата и время операции в формате YYYY-MM-DDTHH:MM (по Бишкеку), пустая строка, если не видно.',
-    '- bank: банк или приложение, если понятно, иначе пустая строка.',
-    '- category: одна из: ' + categories.join(', ') + '. Если ни одна не подходит — «' + UNCATEGORIZED + '».'
+    'Extract ONE transaction from this ' + (source === 'text'
+      ? 'text, read by OCR from a screenshot of a Kyrgyz banking app (MBank, O!Bank/O!Dengi, Simbank…). OCR may break lines or misread symbols.'
+      : 'screenshot/receipt of a Kyrgyz banking app (MBank, O!Bank/O!Dengi, Simbank…).'),
+    'kind: payment (purchase/service, incl. QR) | transfer_out (to another person) | income | transfer_in | own_transfer (between own accounts) | not_a_transaction (no completed operation: error, balance, ad).',
+    'method: qr (QR/ELQR mentioned) | phone_transfer (by phone or card number) | card | other.',
+    'recipient: business (shop, company, named ИП) | person (private individual, e.g. «Алтынбек А.») | self | unknown.',
+    'amount: positive number, without a separately listed fee; 0 if none. currency: ISO code, «сом»/«с» = KGS.',
+    'merchant: recipient name exactly as written (shop/ИП/service, or person), no phone or account numbers.',
+    'date: YYYY-MM-DDTHH:MM (Bishkek time) or "" if not shown. bank: bank/app name or "".',
+    'category: one of [' + categories.join(', ') + '], else «' + UNCATEGORIZED + '».'
   ].join('\n');
 }
 
-/** Отправляет изображение (или PDF) в Claude и возвращает распознанный объект по EXTRACTION_SCHEMA. */
-function extractFromImage_(base64, mime, categories) {
+/** Отправляет содержимое в Claude; возвращает { data: объект по EXTRACTION_SCHEMA, usage: токены }. */
+function callClaude_(content) {
   var apiKey = PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('Не задан ANTHROPIC_API_KEY в свойствах скрипта');
-
-  var data = String(base64).replace(/^data:[^,]+,/, '').replace(/\s/g, '');
-  var mediaType = cleanText(mime) || detectMediaType(data);
-  var fileBlock = mediaType === 'application/pdf'
-    ? { type: 'document', source: { type: 'base64', media_type: mediaType, data: data } }
-    : { type: 'image', source: { type: 'base64', media_type: mediaType, data: data } };
 
   var payload = {
     model: CLAUDE_MODEL,
     max_tokens: 4000,
     fallbacks: 'default',
     output_config: { effort: 'low', format: { type: 'json_schema', schema: EXTRACTION_SCHEMA } },
-    messages: [{ role: 'user', content: [fileBlock, { type: 'text', text: extractionPrompt_(categories) }] }]
+    messages: [{ role: 'user', content: content }]
   };
 
   var res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
@@ -369,13 +371,33 @@ function extractFromImage_(base64, mime, categories) {
   if (code !== 200) {
     throw new Error('Claude API ' + code + ': ' + (body.error && body.error.message || res.getContentText()));
   }
-  if (body.stop_reason === 'refusal') throw new Error('Claude отказался обрабатывать изображение');
+  if (body.stop_reason === 'refusal') throw new Error('Claude отказался обрабатывать чек');
   if (body.stop_reason === 'max_tokens') throw new Error('Ответ Claude обрезан (max_tokens)');
 
+  var usage = body.usage ? { in: body.usage.input_tokens, out: body.usage.output_tokens } : null;
   for (var i = 0; i < body.content.length; i++) {
-    if (body.content[i].type === 'text') return JSON.parse(body.content[i].text);
+    if (body.content[i].type === 'text') return { data: JSON.parse(body.content[i].text), usage: usage };
   }
   throw new Error('Claude не вернул текстовый ответ');
+}
+
+/** Картинка (или PDF) чека → Claude. Дороже: картинка ≈ 1 500 токенов. */
+function extractFromImage_(base64, mime, categories) {
+  var data = String(base64).replace(/^data:[^,]+,/, '').replace(/\s/g, '');
+  var mediaType = cleanText(mime) || detectMediaType(data);
+  var fileBlock = mediaType === 'application/pdf'
+    ? { type: 'document', source: { type: 'base64', media_type: mediaType, data: data } }
+    : { type: 'image', source: { type: 'base64', media_type: mediaType, data: data } };
+  return callClaude_([fileBlock, { type: 'text', text: extractionPrompt_(categories, 'image') }]);
+}
+
+/**
+ * Текст чека (iPhone распознаёт его сам — действие «Извлечь текст из изображения», бесплатно) → Claude.
+ * В 5–10 раз дешевле картинки.
+ */
+function extractFromText_(text, categories) {
+  var receipt = cleanText(text).slice(0, 4000);
+  return callClaude_([{ type: 'text', text: extractionPrompt_(categories, 'text') + '\n\n<receipt>\n' + receipt + '\n</receipt>' }]);
 }
 
 /**
@@ -492,7 +514,7 @@ function isDate_(v) {
 
 function stripToken_(body) {
   var copy = {};
-  for (var k in body) if (k !== 'token' && k !== 'image') copy[k] = body[k];
+  for (var k in body) if (k !== 'token' && k !== 'image' && k !== 'text') copy[k] = body[k];
   return copy;
 }
 

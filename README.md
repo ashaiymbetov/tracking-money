@@ -81,7 +81,7 @@ iPhone, и Claude сам прочитал сумму, получателя и д
 ### 3.1. API-ключ Claude (один раз)
 
 1. Зайди на [console.anthropic.com](https://console.anthropic.com) → **Billing**: пополни баланс
-   (минимум $5, этого хватит на сотни чеков: один скрин стоит ≈ 1–2 цента).
+   (минимум $5, этого хватит на сотни чеков: один скрин стоит ≈ 0,5 цента).
 2. **API Keys → Create Key**, скопируй ключ `sk-ant-…`.
 3. В Apps Script: **⚙️ Project Settings → Script Properties → Add script property**:
    - Property: `ANTHROPIC_API_KEY`
@@ -93,22 +93,26 @@ iPhone, и Claude сам прочитал сумму, получателя и д
 
 ### 3.2. Команда «Скрин расхода» (iPhone)
 
-**Shortcuts → «+»** (новая команда), назови «Скрин расхода», добавь действия по порядку:
+Текст со скрина iPhone распознаёт сам (Live Text, бесплатно, прямо на телефоне), а Claude получает
+**только текст**. Это в 4–5 раз дешевле, чем отправлять картинку: около 0,5 цента за скрин.
+
+**Shortcuts → «+»**, назови «Скрин расхода», добавь действия по порядку:
 
 1. **Take Screenshot**
-2. **Resize Image**: Width `1000` (меньше картинка, дешевле и быстрее)
-3. **Convert Image**: to **JPEG**
-4. **Base64 Encode**: нажми **›** → **Line Breaks: None**
-5. **Get Contents of URL**: URL веб-приложения, **›** → Method `POST`, Request Body `JSON`, поля (Text):
+2. **Extract Text from Image** (Извлечь текст из изображения): вход **Screenshot**
+3. **Get Contents of URL**: URL веб-приложения, **›** → Method `POST`, Request Body `JSON`, поля (Text):
 
    | Key | Value |
    |-----|-------|
    | `token` | токен |
-   | `image` | переменная **Base64 Encoded** |
+   | `text` | переменная **Text** (результат шага 2) |
    | `source` | `screenshot` |
 
-6. **Get Dictionary Value**: `Value` for `message` in `Contents of URL`
-7. **Show Notification**: переменная **Dictionary Value**
+4. **Get Dictionary Value**: `Value` for `message` in `Contents of URL`
+5. **Show Notification**: переменная **Dictionary Value**
+
+> Старый вариант с картинкой (Resize → Convert → Base64 → поле `image`) тоже работает, но дороже.
+> Сколько токенов ушло на каждую операцию, видно в колонке «Исходные данные»: `"ai_tokens":{"in":…,"out":…}`.
 
 ### 3.3. Повесить на двойной тап по крышке
 
@@ -211,7 +215,8 @@ curl -L -X POST 'https://script.google.com/macros/s/…/exec' \
 | `source` | нет | `manual` | по умолчанию `apple-pay` |
 | `date` | нет | `2026-09-28T16:38:00+06:00` | по умолчанию время получения |
 | `action` | нет | `setCategory`, `setBudget` | для приложения; без него — добавить операцию |
-| `image` | вместо `amount` | base64 JPEG/PNG/PDF | распознаётся через Claude, нужен `ANTHROPIC_API_KEY` |
+| `text` | вместо `amount` | текст скрина (OCR на iPhone) | распознаётся через Claude, нужен `ANTHROPIC_API_KEY` (дёшево) |
+| `image` | вместо `amount` | base64 JPEG/PNG/PDF | то же по картинке (дороже) |
 
 Повтор той же суммы в том же магазине в пределах 2 минут считается дублем и не записывается.
 
