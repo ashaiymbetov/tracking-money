@@ -9,7 +9,7 @@
  *   4. В iPhone настрой автоматизацию «Транзакция», которая шлёт POST на этот URL.
  */
 
-var SCRIPT_VERSION = '2026-09-29-ocr';  // видно по GET-запросу на URL скрипта — так проверяем, что развёрнута свежая версия
+var SCRIPT_VERSION = '2026-09-29-merchant';  // видно по GET-запросу на URL скрипта — так проверяем, что развёрнута свежая версия
 var SHEET_TX = 'Транзакции';
 var SHEET_RULES = 'Правила';
 var SHEET_SUMMARY = 'Сводка';
@@ -67,7 +67,6 @@ var DEFAULT_RULES = [
   ['shell', 'Авто'],
   ['beeline', 'Связь'],
   ['megacom', 'Связь'],
-  ['o!', 'Связь'],
   ['netflix', 'Подписки'],
   ['spotify', 'Подписки'],
   ['apple.com', 'Подписки'],
@@ -335,9 +334,12 @@ function extractionPrompt_(categories, source) {
     'method: qr (QR/ELQR mentioned) | phone_transfer (by phone or card number) | card | other.',
     'recipient: business (shop, company, named ИП) | person (private individual, e.g. «Алтынбек А.») | self | unknown.',
     'amount: positive number, without a separately listed fee; 0 if none. currency: ISO code, «сом»/«с» = KGS.',
-    'merchant: recipient name exactly as written (shop/ИП/service, or person), no phone or account numbers.',
+    'merchant: the actual shop/ИП/service or person that received the money — usually under «Purpose of the payment»/«Назначение платежа»/«Получатель». ' +
+      'NEVER use payment processors or stamps: O!Dengi, O!Деньги, Green Telecom Service, XPAY, ELQR, MBank, Simbank, Visa, «PAID». ' +
+      'Write it as in the receipt without service prefixes (MPEmgekLyuks → Emgek Lyuks, MD00APTEKA → APTEKA), no phone/account numbers.',
     'date: YYYY-MM-DDTHH:MM (Bishkek time) or "" if not shown. bank: bank/app name or "".',
-    'category: one of [' + categories.join(', ') + '], else «' + UNCATEGORIZED + '».'
+    'category: one of [' + categories.join(', ') + '], else «' + UNCATEGORIZED + '». Choose by what the merchant sells, not by the payment processor. ' +
+      '«Коммуналка» = electricity, water, gas, heating, garbage, housing fees; «Дом» = goods for the home; «Связь» = mobile/internet top-ups only.'
   ].join('\n');
 }
 
@@ -590,6 +592,9 @@ function normalizeMerchant(value) {
   var s = cleanText(value);
   if (!s) return 'Неизвестно';
   s = s.replace(/^MD\d{2}(?=[A-Z])/, '');                 // префикс терминала MBank
+  // Префикс мерчанта XPAY/O!Деньги, слова слиты: MPEmgekLyuks → Emgek Lyuks (YouTube, PayPal и т. п. не трогаем).
+  if (/^MP[A-Z][a-z]+(?:[A-Z][a-z]+)+$/.test(s)) s = s.slice(2).replace(/([a-z])([A-Z])/g, '$1 $2');
+  else s = s.replace(/^MP(?=[A-Z][a-z])/, '');
   s = s.replace(/[\s,]+(Bishkek|Бишкек|Osh|Ош)([\s,]+(Bishkek|Бишкек|Osh|Ош))*\s*,?\s*(KG|KGZ)?$/i, '');
   s = s.replace(/\s{2,}/g, ' ').replace(/[\s,]+$/, '');
   return s || 'Неизвестно';

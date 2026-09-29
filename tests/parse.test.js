@@ -144,3 +144,16 @@ test('isFare: строки, записанные до появления recipie
   assert.equal(isFare('payment', '', 45, 50), false);     // оплата без типа получателя — скорее магазин
   assert.equal(isFare(undefined, '', 45, 50), false);     // Apple Pay / ручной ввод
 });
+
+test('normalizeMerchant: служебные префиксы XPAY/O!Деньги', () => {
+  assert.equal(normalizeMerchant('MPEmgekLyuks'), 'Emgek Lyuks');
+  assert.equal(normalizeMerchant('Emgek Lyuks'), 'Emgek Lyuks');
+  assert.equal(normalizeMerchant('MPEG Studio'), 'MPEG Studio');      // не трогаем обычные слова
+  assert.equal(normalizeMerchant('Globus Express'), 'Globus Express');
+  assert.equal(normalizeMerchant('YouTube'), 'YouTube');
+  assert.equal(normalizeMerchant('MPNavat'), 'Navat');
+});
+
+test('правило «o!» больше не красит всё из O!Деньги в «Связь»', () => {
+  assert.equal(categorize('O!Деньги', DEFAULT_RULES), 'Без категории');
+});
