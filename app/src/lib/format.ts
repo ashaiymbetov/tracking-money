@@ -38,3 +38,18 @@ export function pluralOps(n: number): string {
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} операции`;
   return `${n} операций`;
 }
+
+export function pluralNew(n: number): string {
+  const mod10 = n % 10, mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return `+${n} новая операция`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `+${n} новые операции`;
+  return `+${n} новых операций`;
+}
+
+/** «только что», «2 мин назад», «в 14:05» */
+export function formatUpdated(ts: number, now = Date.now()): string {
+  const min = Math.floor((now - ts) / 60000);
+  if (min < 1) return 'только что';
+  if (min < 60) return `${min} мин назад`;
+  return `в ${new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`;
+}

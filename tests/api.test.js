@@ -27,7 +27,20 @@ function fakeSheet(name, rows) {
   return s;
 }
 
+const zlib = require('node:zlib');
+const blob = (buf, type) => ({ getBytes: () => Array.from(buf), getDataAsString: () => buf.toString('utf8'), type });
+function fakeCache() {
+  const store = new Map();
+  return {
+    store,
+    get: k => store.get(k) ?? null,
+    getAll: keys => Object.fromEntries(keys.filter(k => store.has(k)).map(k => [k, store.get(k)])),
+    putAll: obj => Object.entries(obj).forEach(([k, v]) => store.set(k, v))
+  };
+}
+
 function load() {
+  const cache = fakeCache();
   const sheets = {
     'Транзакции': fakeSheet('Транзакции', [
       ['Дата', 'Сумма', 'Валюта', 'Магазин', 'Категория', 'Карта', 'Источник', 'Исходные данные'],
@@ -47,11 +60,19 @@ function load() {
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k === 'TOKEN' ? 'secret' : null) }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: t => ({ setMimeType: () => ({ text: t }) }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
-    console
+    CacheService: { getScriptCache: () => cache },
+    Utilities: {
+      newBlob: (data, type) => blob(typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data), type),
+      gzip: b => blob(zlib.gzipSync(Buffer.from(b.getBytes())), 'application/x-gzip'),
+      ungzip: b => blob(zlib.gunzipSync(Buffer.from(b.getBytes())), 'application/octet-stream'),
+      base64Encode: bytes => Buffer.from(bytes).toString('base64'),
+      base64Decode: str => Array.from(Buffer.from(str, 'base64'))
+    },
+    console: { ...console, warn() {} }
   };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../apps-script/Code.gs'), 'utf8'), ctx);
-  return { ctx, sheets };
+  return { ctx, sheets, cache };
 }
 
 const res = out => JSON.parse(out.text);
@@ -164,4 +185,31 @@ test('categorizeUnknown: один запрос к Claude, категории п�
   assert.deepEqual(tx.slice(-3).map(x => x[4]), ['Продукты', 'Кафе и еда', 'Продукты']);
   assert.equal(r.updated, 3);
   assert.deepEqual(sheets['Правила'].rows.slice(1, 3), [['азия', 'Продукты'], ['шоро', 'Кафе и еда']]);
+});
+
+test('кэш приложения: второй запрос из кэша, после покупки кэш уже содержит новую операцию', () => {
+  const { ctx } = load();
+  const get = () => res(ctx.doGet({ parameter: { action: 'data', token: 'secret' } }));
+  const first = get();
+  assert.equal(first.cached, false);
+  const second = get();
+  assert.equal(second.cached, true);
+  assert.deepEqual(second.transactions.map(t => t.id), first.transactions.map(t => t.id));
+
+  const r = res(ctx.doPost({ postData: { contents: JSON.stringify({ token: 'secret', amount: 'KGS 52,00', merchant: 'Globus Express', card: 'Visa' }) } }));
+  assert.equal(r.ok, true);
+  const third = get();
+  assert.equal(third.cached, true);                           // пересобран сразу после записи
+  assert.ok(third.transactions.some(t => t.merchant === 'Globus Express' && t.amount === 52));
+});
+
+test('кэш: большие данные режутся на куски и собираются обратно', () => {
+  const { ctx, sheets, cache } = load();
+  const tx = sheets['Транзакции'].rows;
+  for (let i = 0; i < 12000; i++) tx.push([new Date(Date.now() - i * 60000), 100 + i, 'KGS', 'Магазин ' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2), 'Продукты', 'Card', 'statement', '{}']);
+  const first = res(ctx.doGet({ parameter: { action: 'data', token: 'secret' } }));
+  assert.equal(Number(cache.store.get('data:v1')) >= 2, true);   // больше одного куска
+  const second = res(ctx.doGet({ parameter: { action: 'data', token: 'secret' } }));
+  assert.equal(second.cached, true);
+  assert.equal(second.transactions.length, first.transactions.length);
 });

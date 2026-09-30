@@ -13,6 +13,7 @@ import { AnalyticsSkeleton, BudgetsSkeleton, HomeSkeleton, ListSkeleton } from '
 import { loadConnection, saveConnection } from './lib/config';
 import { clearCache, useAddExpense, useData, useSetBudget, useSetCategory } from './lib/queries';
 import { countable, monthKey, shiftMonth, type MonthKey } from './lib/stats';
+import { formatUpdated, pluralNew } from './lib/format';
 import type { Connection, Transaction } from './lib/types';
 
 // Recharts тяжёлый — грузим аналитику отдельным чанком, главная открывается сразу (а чанк подгружаем в фоне).
@@ -98,6 +99,22 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
   useEffect(() => { const id = setTimeout(loadAnalytics, 1500); return () => clearTimeout(id); }, []);
 
   const txs = useMemo(() => (data ? countable(data) : []), [data]);
+
+  // «+1 новая операция», когда свежие данные принесли то, чего не было (свои ручные добавления не считаем).
+  const knownIds = useRef<Set<number> | null>(null);
+  useEffect(() => {
+    if (!data) return;
+    const ids = new Set(data.transactions.map(t => t.id));
+    const prev = knownIds.current;
+    knownIds.current = ids;
+    if (!prev) return;
+    const fresh = data.transactions.filter(t => !prev.has(t.id) && t.id > 0 && t.source !== 'app').length;
+    if (fresh > 0 && fresh < 50) notify(pluralNew(fresh));
+  }, [data, notify]);
+
+  // «Обновлено N мин назад» — пересчитываем раз в 30 секунд.
+  const [, tick] = useState(0);
+  useEffect(() => { const id = setInterval(() => tick(n => n + 1), 30_000); return () => clearInterval(id); }, []);
   const now = monthKey(new Date());
   const minMonth = shiftMonth(now, -12);
 
@@ -107,7 +124,18 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
       <header className={clsx('pt-safe sticky top-0 z-20 bg-bg px-4 pb-2 transition-shadow duration-200',
         scrolled && 'shadow-[0_1px_0_var(--line)]')}>
         <div className="flex items-center justify-between pt-1">
-          <h1 className="text-[28px] font-bold tracking-tight">{TITLES[tab]}</h1>
+          <div className="min-w-0">
+            <h1 className="text-[28px] font-bold leading-tight tracking-tight">{TITLES[tab]}</h1>
+            <div className="flex h-4 items-center gap-1.5 text-[12px] text-ink-3" aria-live="polite">
+              {query.isFetching ? (
+                <><RefreshCw size={11} className="animate-spin" /> Обновляю…</>
+              ) : query.isError && data ? (
+                <span className="text-critical">Не удалось обновить</span>
+              ) : query.dataUpdatedAt > 0 ? (
+                <>Обновлено {formatUpdated(query.dataUpdatedAt)}</>
+              ) : null}
+            </div>
+          </div>
           <div className="flex items-center gap-1">
             {conn.demo && <span className="rounded-full bg-warning/20 px-2 py-0.5 text-[11px] font-semibold text-ink-2">демо</span>}
             <button onClick={() => query.refetch()} className="flex h-9 w-9 items-center justify-center rounded-full text-ink-2" aria-label="Обновить">

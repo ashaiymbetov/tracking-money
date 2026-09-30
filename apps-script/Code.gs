@@ -9,7 +9,7 @@
  *   4. В iPhone настрой автоматизацию «Транзакция», которая шлёт POST на этот URL.
  */
 
-var SCRIPT_VERSION = '2026-09-29-import';  // видно по GET-запросу на URL скрипта — так проверяем, что развёрнута свежая версия
+var SCRIPT_VERSION = '2026-09-30-cache';  // видно по GET-запросу на URL скрипта — так проверяем, что развёрнута свежая версия
 var SHEET_TX = 'Транзакции';
 var SHEET_RULES = 'Правила';
 var SHEET_SUMMARY = 'Сводка';
@@ -115,6 +115,8 @@ function doPost(e) {
         : body.action === 'import' ? importRows_(body)
         : body.action === 'categorizeUnknown' ? categorizeUnknown_()
         : addTransaction_(body);
+      // Сразу пересобираем кэш для приложения: открыл его после покупки — данные уже готовы.
+      if (result && result.ok && !result.skipped && !result.duplicate) refreshDataCache_();
       return json_(result);
     } finally {
       lock.releaseLock();
@@ -129,7 +131,12 @@ function doGet(e) {
   if (p.action === 'data') {
     if (p.token !== PropertiesService.getScriptProperties().getProperty('TOKEN')) return fail_('неверный токен');
     try {
-      return json_(buildData_(getSpreadsheet_()));
+      var started = Date.now();
+      var cached = readDataCache_();
+      if (cached) return textJson_(cached.replace(/^\{/, '{"cached":true,"serverMs":' + (Date.now() - started) + ','));
+      var fresh = JSON.stringify(buildData_(getSpreadsheet_()));
+      writeDataCache_(fresh);
+      return textJson_(fresh.replace(/^\{/, '{"cached":false,"serverMs":' + (Date.now() - started) + ','));
     } catch (err) {
       return fail_(String(err && err.message || err));
     }
@@ -140,6 +147,60 @@ function doGet(e) {
 // ---------------------------------------------------------------------------
 // API для приложения
 // ---------------------------------------------------------------------------
+
+// Кэш готового ответа doGet?action=data. Сжат (gzip + base64) и порезан на куски: у CacheService лимит 100 КБ на ключ.
+var DATA_CACHE_KEY = 'data:v1';
+var DATA_CACHE_TTL = 25 * 60;          // сек; обновляется после каждой записи и по расписанию раз в 10 минут
+var DATA_CACHE_CHUNK = 90000;
+
+function writeDataCache_(json) {
+  try {
+    var packed = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(json, 'application/json')).getBytes());
+    var parts = {};
+    var n = Math.ceil(packed.length / DATA_CACHE_CHUNK);
+    if (n > 20) return;                                   // слишком большой ответ — просто без кэша
+    for (var i = 0; i < n; i++) parts[DATA_CACHE_KEY + ':' + i] = packed.slice(i * DATA_CACHE_CHUNK, (i + 1) * DATA_CACHE_CHUNK);
+    parts[DATA_CACHE_KEY] = String(n);
+    CacheService.getScriptCache().putAll(parts, DATA_CACHE_TTL);
+  } catch (err) {
+    console.warn('кэш не записан: ' + err);
+  }
+}
+
+function readDataCache_() {
+  try {
+    var cache = CacheService.getScriptCache();
+    var n = Number(cache.get(DATA_CACHE_KEY));
+    if (!n) return null;
+    var keys = [];
+    for (var i = 0; i < n; i++) keys.push(DATA_CACHE_KEY + ':' + i);
+    var got = cache.getAll(keys);
+    var packed = '';
+    for (var j = 0; j < n; j++) {
+      if (!got[keys[j]]) return null;                     // кусок вытеснен — пересоберём
+      packed += got[keys[j]];
+    }
+    return Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(packed), 'application/x-gzip')).getDataAsString();
+  } catch (err) {
+    return null;
+  }
+}
+
+/** Пересобрать кэш сейчас. Вызывается после записей и триггером по расписанию (см. setup). */
+function refreshDataCache_() {
+  try {
+    writeDataCache_(JSON.stringify(buildData_(getSpreadsheet_())));
+  } catch (err) {
+    console.warn('кэш не обновлён: ' + err);
+  }
+}
+
+/** Для триггера по расписанию: подхватывает ручные правки в таблице и держит скрипт «тёплым». */
+function refreshCache() { refreshDataCache_(); }
+
+function textJson_(text) {
+  return ContentService.createTextOutput(text).setMimeType(ContentService.MimeType.JSON);
+}
 
 /** Все операции за последние API_MONTHS месяцев + справочники. */
 function buildData_(ss) {
@@ -805,6 +866,13 @@ function setup() {
 
   var sheet1 = ss.getSheetByName('Sheet1') || ss.getSheetByName('Лист1');
   if (sheet1 && sheet1.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(sheet1);
+
+  // Раз в 10 минут освежаем кэш для приложения (переустанавливаем, чтобы не плодить дубли триггеров).
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'refreshCache') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('refreshCache').timeBased().everyMinutes(10).create();
+  refreshDataCache_();
 
   Logger.log('Готово. Таблица: ' + ss.getUrl());
   Logger.log('Токен для Команды на iPhone: ' + props.getProperty('TOKEN'));
