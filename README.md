@@ -162,6 +162,25 @@ iPhone, и Claude сам прочитал сумму, получателя и д
 
 Смотреть с телефона удобно в приложении Google Sheets: лист «Сводка».
 
+## Автодеплой скрипта (один раз настроить — дальше само)
+
+GitHub Actions ([`.github/workflows/apps-script.yml`](.github/workflows/apps-script.yml)) при каждом изменении
+`apps-script/` прогоняет тесты, заливает код в твой проект Apps Script (`clasp push`), создаёт новую версию и
+обновляет **существующее** развёртывание — URL не меняется. В конце проверяет, что скрипт отвечает новой версией.
+
+1. Включи Apps Script API: [script.google.com/home/usersettings](https://script.google.com/home/usersettings) → **Google Apps Script API → On**.
+2. На компьютере с [Node.js](https://nodejs.org) (LTS) в терминале: `npx @google/clasp@3.4.1 login` → в браузере выбери свой аккаунт → **Allow**.
+   Появится файл `.clasprc.json` в домашней папке (Windows: `C:\Users\<имя>\.clasprc.json`, macOS: `~/.clasprc.json`).
+3. GitHub → репозиторий → **Settings → Secrets and variables → Actions → New repository secret**, три секрета:
+   - `CLASPRC_JSON` — всё содержимое файла `.clasprc.json`;
+   - `SCRIPT_ID` — Apps Script → ⚙️ **Project Settings** → **Script ID**;
+   - `DEPLOYMENT_ID` — часть URL веб-приложения между `/s/` и `/exec`.
+4. **Actions → Deploy Apps Script → Run workflow** — проверка.
+
+Если в коде появятся **новые разрешения Google**, их всё равно нужно один раз подтвердить вручную
+(запустить `setup` в редакторе) — workflow об этом напишет. `.clasprc.json` даёт доступ к твоим проектам
+Apps Script: не выкладывай его никуда, кроме секретов, и не давай права записи в репозиторий тем, кому не доверяешь.
+
 ## 5. Приложение на iPhone
 
 В папке [`app/`](app) лежит приложение (PWA): React 19, TypeScript, Vite, Tailwind CSS v4, TanStack Query,

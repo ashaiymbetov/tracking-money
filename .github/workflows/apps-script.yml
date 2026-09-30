@@ -1,0 +1,83 @@
+name: Deploy Apps Script
+
+# Сам заливает apps-script/Code.gs в проект Google и обновляет существующее развёртывание (URL не меняется).
+# Нужны секреты репозитория: CLASPRC_JSON (файл ~/.clasprc.json после `clasp login`), SCRIPT_ID, DEPLOYMENT_ID.
+# Без них workflow просто прогоняет тесты и пропускает деплой. Инструкция — README, раздел «Автодеплой скрипта».
+
+on:
+  push:
+    branches: [main, claude/expense-tracking-automation-77d1yh]
+    paths: ['apps-script/**', 'tests/**', '.github/workflows/apps-script.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: apps-script
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CLASP: npx -y @google/clasp@3.4.1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Tests
+        run: npm test
+
+      - name: Check secrets
+        id: secrets
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+          DEPLOYMENT_ID: ${{ secrets.DEPLOYMENT_ID }}
+        run: |
+          if [ -z "$CLASPRC_JSON" ] || [ -z "$SCRIPT_ID" ] || [ -z "$DEPLOYMENT_ID" ]; then
+            echo "::warning::Секреты CLASPRC_JSON / SCRIPT_ID / DEPLOYMENT_ID не заданы — деплой пропущен (см. README)."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push code and update deployment
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+          DEPLOYMENT_ID: ${{ secrets.DEPLOYMENT_ID }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          printf '{"scriptId":"%s","rootDir":"apps-script"}' "$SCRIPT_ID" > .clasp.json
+          DESC="GitHub ${GITHUB_SHA::7}"
+          $CLASP push -f
+          OUT=$($CLASP --json create-version "$DESC" 2>&1)
+          echo "$OUT"
+          VERSION=$(echo "$OUT" | grep -oE '"versionNumber": *[0-9]+' | grep -oE '[0-9]+$' || true)
+          [ -n "$VERSION" ] || VERSION=$(echo "$OUT" | grep -oE 'Created version [0-9]+' | grep -oE '[0-9]+$' || true)
+          [ -n "$VERSION" ] || { echo "::error::Не удалось узнать номер версии"; exit 1; }
+          $CLASP update-deployment "$DEPLOYMENT_ID" -V "$VERSION" -d "$DESC"
+          echo "Развёрнута версия $VERSION"
+
+      - name: Verify the live script answers with the new version
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          DEPLOYMENT_ID: ${{ secrets.DEPLOYMENT_ID }}
+        run: |
+          set -euo pipefail
+          EXPECTED=$(grep -oE "SCRIPT_VERSION = '[^']+'" apps-script/Code.gs | cut -d"'" -f2)
+          for i in 1 2 3 4 5; do
+            BODY=$(curl -sL "https://script.google.com/macros/s/$DEPLOYMENT_ID/exec" || true)
+            if echo "$BODY" | grep -q "\"version\":\"$EXPECTED\""; then echo "OK: отвечает $EXPECTED"; exit 0; fi
+            sleep 5
+          done
+          echo "::error::Скрипт не отвечает версией $EXPECTED. Ответ: ${BODY:0:300}"
+          echo "::error::Если в коде появились новые разрешения Google — открой Apps Script и запусти setup вручную один раз."
+          exit 1
