@@ -139,7 +139,7 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
 
   return (
     <LogosContext.Provider value={data?.logos ?? []}>
-    {/* Страница всегда чуть выше экрана */} — даже пока грузятся данные, иначе iOS укоротит окно.
+    {/* Страница всегда чуть выше экрана — даже пока грузятся данные, иначе iOS укоротит окно. */}
     <div className="mx-auto max-w-lg" style={{ minHeight: 'calc(100lvh + 1px)' }}>
       <header className={clsx('pt-safe sticky top-0 z-20 bg-bg px-4 pb-2 transition-shadow duration-200',
         scrolled && 'shadow-[0_1px_0_var(--line)]')}>
