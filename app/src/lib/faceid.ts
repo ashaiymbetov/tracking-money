@@ -6,8 +6,44 @@
  */
 
 const KEY = 'tm.faceid';
-/** Свернул приложение меньше чем на минуту — снова Face ID не спрашиваем. */
-export const LOCK_GRACE_MS = 60_000;
+const GRACE_KEY = 'tm.faceid.grace';
+const SEEN_KEY = 'tm.faceid.seen';
+
+/** Сколько минут после ухода из приложения Face ID не спрашивать снова (0 — каждый раз). */
+export const GRACE_OPTIONS = [0, 5, 30, 60] as const;
+export type Grace = typeof GRACE_OPTIONS[number];
+const DEFAULT_GRACE: Grace = 5;
+
+export function lockGrace(): Grace {
+  try {
+    const v = Number(localStorage.getItem(GRACE_KEY));
+    return (GRACE_OPTIONS as readonly number[]).includes(v) && localStorage.getItem(GRACE_KEY) !== null ? v as Grace : DEFAULT_GRACE;
+  } catch {
+    return DEFAULT_GRACE;
+  }
+}
+
+export function setLockGrace(g: Grace) {
+  try { localStorage.setItem(GRACE_KEY, String(g)); } catch { /* приватный режим */ }
+}
+
+/** «Каждый раз» — всё же с запасом в 10 секунд, чтобы не спрашивать из-за мелькнувшего системного окна. */
+const graceMs = () => Math.max(lockGrace() * 60_000, 10_000);
+
+/** Запоминаем, когда приложение ушло в фон: iOS часто выгружает его, и при новом запуске это уже «холодный старт». */
+export function markSeen() {
+  try { localStorage.setItem(SEEN_KEY, String(Date.now())); } catch { /* приватный режим */ }
+}
+
+/** Нужно ли спрашивать Face ID, если из приложения ушли в момент `since` (по умолчанию — последний уход в фон). */
+export function shouldLock(since?: number): boolean {
+  if (!lockCredential()) return false;
+  let t = since;
+  if (t === undefined) {
+    try { t = Number(localStorage.getItem(SEEN_KEY)) || 0; } catch { t = 0; }
+  }
+  return !t || Date.now() - t > graceMs();
+}
 
 const random = (n: number) => crypto.getRandomValues(new Uint8Array(n));
 const toB64 = (b: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -18,7 +54,7 @@ export function lockCredential(): string | null {
 }
 
 export function clearLock() {
-  try { localStorage.removeItem(KEY); } catch { /* приватный режим */ }
+  try { localStorage.removeItem(KEY); localStorage.removeItem(SEEN_KEY); } catch { /* приватный режим */ }
 }
 
 /** Есть ли на устройстве Face ID / Touch ID, доступный сайту. */

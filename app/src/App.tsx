@@ -16,7 +16,7 @@ import { clearCache, useAddExpense, useData, useSetBudget, useSetCategory, useSe
 import { LogosContext } from './lib/logoContext';
 import { merchantsWithoutLogo } from './lib/logos';
 import { findLogos } from './lib/api';
-import { clearLock, disableLock, enableLock, faceIdAvailable, lockCredential } from './lib/faceid';
+import { clearLock, disableLock, enableLock, faceIdAvailable, GRACE_OPTIONS, lockCredential, lockGrace, markSeen, setLockGrace, shouldLock, type Grace } from './lib/faceid';
 import { countable, monthKey, shiftMonth, type MonthKey } from './lib/stats';
 import { formatUpdated, pluralNew } from './lib/format';
 import type { Connection, Transaction } from './lib/types';
@@ -49,9 +49,10 @@ export default function App() {
     new URLSearchParams(location.search).has('demo') ? { url: '', token: '', demo: true } : loadConnection());
 
   const [lockOn, setLockOn] = useState(() => !!lockCredential());
-  const [locked, setLocked] = useState(lockOn);
+  // iOS часто выгружает приложение из памяти — если открыл снова в пределах выбранного времени, Face ID не нужен.
+  const [locked, setLocked] = useState(() => shouldLock());
   const lock = useCallback(() => setLocked(true), []);
-  useAutoLock(lockOn && !!conn, lock);
+  useAutoLock(lockOn && !!conn, locked, lock);
 
   const logout = () => { saveConnection(null); clearCache(); clearLock(); setLockOn(false); setLocked(false); setConn(null); };
   if (!conn) return <Setup onDone={c => { saveConnection(c); setConn(c); }} />;
@@ -61,7 +62,7 @@ export default function App() {
       <div inert={locked}>
         <Main conn={conn} onLogout={logout} lockOn={lockOn} onLockChange={setLockOn} />
       </div>
-      {locked && <LockScreen onUnlock={() => setLocked(false)} onReset={logout} />}
+      {locked && <LockScreen onUnlock={() => { markSeen(); setLocked(false); }} onReset={logout} />}
     </>
   );
 }
@@ -147,6 +148,7 @@ function Main({ conn, onLogout, lockOn, onLockChange }: {
   const [canFaceId, setCanFaceId] = useState(false);
   useEffect(() => { faceIdAvailable().then(setCanFaceId); }, []);
   const [lockBusy, setLockBusy] = useState(false);
+  const [grace, setGrace] = useState<Grace>(lockGrace);
   const toggleLock = async () => {
     setLockBusy(true);
     try {
@@ -305,7 +307,21 @@ function Main({ conn, onLogout, lockOn, onLockChange }: {
                 <span className={clsx('absolute top-[2px] left-[2px] h-[27px] w-[27px] rounded-full bg-white shadow transition-transform duration-200', lockOn && 'translate-x-5')} />
               </span>
             </button>
-            <p className="mb-3 text-center text-[12px] text-ink-3">Спрашивает Face ID при открытии и если приложение было свёрнуто дольше минуты.</p>
+            {lockOn ? (
+              <div className="mb-3 mt-2">
+                <div className="mb-1.5 px-1 text-[13px] text-ink-3">Снова спрашивать, если не заходил</div>
+                <div className="grid grid-cols-4 gap-1 rounded-2xl bg-surface-2 p-1">
+                  {GRACE_OPTIONS.map(g => (
+                    <button key={g} onClick={() => { setLockGrace(g); setGrace(g); }}
+                      className={clsx('rounded-xl py-2 text-[14px] font-semibold transition-colors', grace === g ? 'bg-accent text-white' : 'text-ink-2')}>
+                      {g === 0 ? 'Сразу' : g === 60 ? '1 час' : `${g} мин`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="mb-3 text-center text-[12px] text-ink-3">Приложение будет открываться по лицу.</p>
+            )}
           </>
         )}
         <button onClick={onLogout} className="mb-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-surface-2 py-3.5 font-semibold text-critical">
