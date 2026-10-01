@@ -4,3 +4,4 @@ dist/
 .DS_Store
 .clasp.json
 .clasprc.json
+*.tsbuildinfo
