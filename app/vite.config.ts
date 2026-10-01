@@ -37,7 +37,17 @@ export default defineConfig({
         navigateFallback: 'index.html',
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
         // pdf.js (~1,8 МБ) нужен только для импорта выписки — не кладём его в офлайн-кэш при установке
-        globIgnores: ['**/pdf*.{js,mjs}', '**/statement-*.js']
+        globIgnores: ['**/pdf*.{js,mjs}', '**/statement-*.js'],
+        // Иконки магазинов — кэшируем на телефоне на месяц, чтобы грузились один раз.
+        runtimeCaching: [{
+          urlPattern: ({ url }) => url.hostname === 'www.google.com' && url.pathname.startsWith('/s2/favicons') || url.hostname === 'icons.duckduckgo.com',
+          handler: 'CacheFirst',
+          options: {
+            cacheName: 'merchant-logos',
+            expiration: { maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 30 },
+            cacheableResponse: { statuses: [0, 200] }
+          }
+        }]
       }
     })
   ],

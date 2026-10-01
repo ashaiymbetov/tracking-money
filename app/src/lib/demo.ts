@@ -82,6 +82,13 @@ export async function demoMutate(p: Record<string, unknown>) {
     let id = Math.max(...state.transactions.map(t => t.id)) + 1;
     for (const r of rows) state.transactions.push({ id: id++, date: new Date(r.date).toISOString(), amount: r.amount, currency: 'KGS', merchant: r.merchant, category: r.category ?? 'Без категории', card: String(p.bank), source: 'statement' });
     return { ok: true, added: rows.length, duplicates: 0, uncategorized: rows.filter(r => !r.category).length, message: `Добавлено ${rows.length} (демо)` };
+  } else if (p.action === 'setLogo') {
+    const pattern = String(p.merchant).toLowerCase();
+    state.logos = (state.logos ?? []).filter(([k]) => k !== pattern);
+    if (p.site) state.logos.push([pattern, String(p.site)]);
+    return { ok: true, logos: state.logos, message: 'Логотип сохранён (демо)' };
+  } else if (p.action === 'findLogos') {
+    return { ok: true, found: 0, logos: state.logos ?? [], message: 'В демо Claude не вызывается' };
   } else if (p.action === 'categorizeUnknown') {
     return { ok: true, updated: 0, message: 'В демо Claude не вызывается' };
   } else if (p.action === 'setBudget') {

@@ -77,5 +77,13 @@ export interface CategorizeResult extends PostResult { updated?: number; rules?:
 export const importStatement = (c: Connection, bank: string, rows: StatementExpense[]) =>
   post(c, { action: 'import', bank, card: bank, rows }) as Promise<ImportResult>;
 
+export interface LogosResult extends PostResult { logos?: [string, string][]; found?: number; checked?: number }
+
+export const setLogo = (c: Connection, merchant: string, site: string) =>
+  post(c, { action: 'setLogo', merchant, site }) as Promise<LogosResult>;
+
+export const findLogos = (c: Connection, merchants: string[]) =>
+  post(c, { action: 'findLogos', merchants }) as Promise<LogosResult>;
+
 export const categorizeUnknown = (c: Connection) =>
   post(c, { action: 'categorizeUnknown' }) as Promise<CategorizeResult>;

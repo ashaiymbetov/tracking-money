@@ -9,7 +9,7 @@
  *   4. В iPhone настрой автоматизацию «Транзакция», которая шлёт POST на этот URL.
  */
 
-var SCRIPT_VERSION = '2026-09-30-cache';  // видно по GET-запросу на URL скрипта — так проверяем, что развёрнута свежая версия
+var SCRIPT_VERSION = '2026-10-01-logos';  // видно по GET-запросу на URL скрипта — так проверяем, что развёрнута свежая версия
 var SHEET_TX = 'Транзакции';
 var SHEET_RULES = 'Правила';
 var SHEET_SUMMARY = 'Сводка';
@@ -18,6 +18,7 @@ var EXCLUDED = 'Не учитывать';        // строка остаётс�
 var TRANSPORT = 'Транспорт';
 var SHEET_SETTINGS = 'Настройки';
 var SHEET_BUDGETS = 'Бюджеты';
+var SHEET_LOGOS = 'Логотипы';
 var API_MONTHS = 13;                  // сколько месяцев истории отдаёт API приложению
 var DEFAULT_FARE_MAX = 50;            // QR-оплата человеку до этой суммы = проезд в маршрутке
 var TIMEZONE = 'Asia/Bishkek';
@@ -113,6 +114,8 @@ function doPost(e) {
       var result = body.action === 'setCategory' ? setCategory_(body)
         : body.action === 'setBudget' ? setBudget_(body)
         : body.action === 'import' ? importRows_(body)
+        : body.action === 'setLogo' ? setLogo_(body)
+        : body.action === 'findLogos' ? findLogos_(body)
         : body.action === 'categorizeUnknown' ? categorizeUnknown_()
         : addTransaction_(body);
       // Сразу пересобираем кэш для приложения: открыл его после покупки — данные уже готовы.
@@ -238,6 +241,7 @@ function buildData_(ss) {
     uncategorized: UNCATEGORIZED,
     categories: categories,
     budgets: loadBudgets_(ss),
+    logos: loadLogos_(ss),
     settings: loadSettings_(ss),
     transactions: tx
   };
@@ -400,6 +404,145 @@ function categorizeUnknown_() {
     ok: true, updated: updated, rules: newRules.length, tokens: ai.usage,
     message: 'Разобрано ' + updated + ' операций, запомнено ' + newRules.length + ' мест'
   };
+}
+
+/** Лист «Логотипы»: «если в названии есть…» → сайт (globus.kg) или ссылка на картинку. */
+function loadLogos_(ss) {
+  var sheet = ss.getSheetByName(SHEET_LOGOS);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues()
+    .map(function (r) { return [cleanText(r[0]).toLowerCase(), cleanText(r[1])]; })
+    .filter(function (r) { return r[0] && r[1]; });
+}
+
+/** «Сайт магазина» из приложения: globus.kg, https://globus.kg/ru → globus.kg; ссылку на картинку храним как есть. */
+function normalizeLogoSource(value) {
+  var v = cleanText(value);
+  if (!v) return '';
+  if (/^https?:\/\/.+\.(png|jpe?g|svg|webp|gif|ico)(\?.*)?$/i.test(v)) return v;
+  return v.replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/[\/?#].*$/, '').toLowerCase();
+}
+
+function setLogo_(body) {
+  var ss = getSpreadsheet_();
+  var pattern = cleanText(body.merchant).toLowerCase();
+  if (!pattern) return { ok: false, error: 'нет названия', message: '⚠️ Нет названия магазина' };
+  var source = normalizeLogoSource(body.site);
+  var sheet = ss.getSheetByName(SHEET_LOGOS) || ss.insertSheet(SHEET_LOGOS);
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(['Если в названии есть…', 'Сайт или ссылка на картинку']);
+    sheet.setFrozenRows(1);
+    sheet.getRange('1:1').setFontWeight('bold');
+  }
+  var last = sheet.getLastRow();
+  var names = last >= 2 ? sheet.getRange(2, 1, last - 1, 1).getValues().map(function (r) { return cleanText(r[0]).toLowerCase(); }) : [];
+  var idx = names.indexOf(pattern);
+  if (idx !== -1 && !source) sheet.deleteRow(idx + 2);
+  else if (idx !== -1) sheet.getRange(idx + 2, 2).setValue(source);
+  else if (source) sheet.appendRow([pattern, source]);
+  return { ok: true, logos: loadLogos_(ss), message: source ? 'Логотип сохранён' : 'Логотип убран' };
+}
+
+var LOGO_BATCH = 25;          // мест за один запуск
+var LOGO_MAX_SEARCHES = 10;   // веб-поисков на запуск — ограничивает цену (≈ до 40 центов)
+
+/**
+ * «Найти логотипы»: Claude определяет официальный сайт для мест без логотипа (известные бренды — по знанию,
+ * местные — веб-поиском) и сохраняет их на лист «Логотипы». Дальше иконки грузятся с сайтов бесплатно.
+ */
+function findLogos_(body) {
+  var merchants = (Array.isArray(body.merchants) ? body.merchants : [])
+    .map(cleanText).filter(Boolean).slice(0, LOGO_BATCH);
+  if (!merchants.length) return { ok: true, found: 0, message: 'Все места уже с логотипами' };
+
+  var prompt = [
+    'These are merchant names from Kyrgyz bank statements (Bishkek). For each, find the official website domain of the brand or business.',
+    'Rules: use your own knowledge for well-known brands (prefer the Kyrgyz site if it exists, e.g. a .kg domain, otherwise the global one).',
+    'Use web search only for local businesses you are not sure about, at most ' + LOGO_MAX_SEARCHES + ' searches in total.',
+    'Names may be transliterated or truncated (e.g. "Imperiya Pitstsy Oshskiy" = «Империя пиццы»). Ignore branch numbers and addresses.',
+    'If there is no official site, or you are not sure it is the same business, use null — a wrong logo is worse than none.',
+    'keyword: a short lowercase part of the given name that identifies the brand (e.g. "intersport", "imperiya pitstsy").',
+    'Answer with ONLY a JSON object, no prose: {"items":[{"merchant":"<as given>","keyword":"<lowercase>","domain":"example.kg" or null}]}',
+    '',
+    merchants.map(function (m, i) { return (i + 1) + '. ' + m; }).join('\n')
+  ].join('\n');
+
+  var tools = [{ type: 'web_search_20260209', name: 'web_search', max_uses: LOGO_MAX_SEARCHES }];
+  var reply = callClaudeLoop_([{ role: 'user', content: prompt }], tools, 8000);
+  var parsed = extractJsonObject(reply.text);
+  var items = parsed && Array.isArray(parsed.items) ? parsed.items : [];
+
+  var ss = getSpreadsheet_();
+  var found = 0;
+  items.forEach(function (it) {
+    var domain = normalizeLogoSource(it && it.domain);
+    var merchant = cleanText(it && it.merchant).toLowerCase();
+    if (!merchant || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) return;
+    var keyword = cleanText(it.keyword).toLowerCase();
+    var pattern = keyword.length >= 3 && merchant.indexOf(keyword) !== -1 ? keyword : merchant;
+    setLogo_({ merchant: pattern, site: domain });
+    found++;
+  });
+  return {
+    ok: true, found: found, checked: merchants.length, tokens: reply.usage, searches: reply.searches,
+    logos: loadLogos_(ss),
+    message: 'Найдено логотипов: ' + found + ' из ' + merchants.length
+  };
+}
+
+/** Первый JSON-объект в тексте ответа (Claude с веб-поиском отвечает текстом, а не structured output). */
+function extractJsonObject(text) {
+  var s = String(text || '');
+  var start = s.indexOf('{');
+  while (start !== -1) {
+    var depth = 0;
+    for (var i = start; i < s.length; i++) {
+      if (s[i] === '{') depth++;
+      else if (s[i] === '}' && --depth === 0) {
+        try { return JSON.parse(s.slice(start, i + 1)); } catch (e) { break; }
+      }
+    }
+    start = s.indexOf('{', start + 1);
+  }
+  return null;
+}
+
+/**
+ * Запрос к Claude с серверными инструментами (веб-поиск). Если сервер прервал ход (pause_turn),
+ * дослаем ответ ассистента и продолжаем — не больше 4 раз.
+ */
+function callClaudeLoop_(messages, tools, maxTokens) {
+  var apiKey = PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY');
+  if (!apiKey) throw new Error('Не задан ANTHROPIC_API_KEY в свойствах скрипта');
+  var usage = { in: 0, out: 0 };
+  var searches = 0;
+  var text = '';
+  for (var round = 0; round < 5; round++) {
+    var res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'server-side-fallback-2026-07-01' },
+      payload: JSON.stringify({
+        model: CLAUDE_MODEL, max_tokens: maxTokens, fallbacks: 'default',
+        output_config: { effort: 'low' }, tools: tools, messages: messages
+      }),
+      muteHttpExceptions: true
+    });
+    var body = JSON.parse(res.getContentText());
+    if (res.getResponseCode() !== 200) {
+      throw new Error('Claude API ' + res.getResponseCode() + ': ' + (body.error && body.error.message || res.getContentText()));
+    }
+    if (body.usage) {
+      usage.in += body.usage.input_tokens || 0;
+      usage.out += body.usage.output_tokens || 0;
+      searches += (body.usage.server_tool_use && body.usage.server_tool_use.web_search_requests) || 0;
+    }
+    (body.content || []).forEach(function (b) { if (b.type === 'text') text += b.text; });
+    if (body.stop_reason === 'refusal') throw new Error('Claude отказался выполнять запрос');
+    if (body.stop_reason !== 'pause_turn') break;
+    messages = messages.concat([{ role: 'assistant', content: body.content }]);
+  }
+  return { text: text, usage: usage, searches: searches };
 }
 
 /** Лимит на категорию в месяц; limit 0 — убрать. */

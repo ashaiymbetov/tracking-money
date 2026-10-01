@@ -3,7 +3,7 @@ import { Card, Empty } from '../components/ui';
 import { CategoryBars } from '../components/charts';
 import { DailyChart, MonthlyChart } from '../components/TimeCharts';
 import { ChartSk } from '../components/Skeletons';
-import { CategoryBadge } from '../lib/categories';
+import { MerchantAvatar } from '../components/MerchantAvatar';
 import { formatMoney } from '../lib/format';
 import { byCategory, byDay, byMerchant, byMonth, inMonth, monthKey, summarize, type MonthKey } from '../lib/stats';
 import type { Transaction } from '../lib/types';
@@ -54,7 +54,7 @@ export const Analytics = memo(function Analytics({ txs, month, active, onMonth, 
           {merchants.map((m, i) => (
             <li key={m.merchant} className="flex items-center gap-3 px-1 py-2">
               <span className="tnum w-5 text-center text-[13px] font-semibold text-ink-3">{i + 1}</span>
-              <CategoryBadge category={m.category} size={36} />
+              <MerchantAvatar merchant={m.merchant} category={m.category} size={36} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[15px] font-medium">{m.merchant}</span>
                 <span className="block text-[13px] text-ink-3">{m.count} раз · {m.category}</span>

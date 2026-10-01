@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { FileUp, LogOut, RefreshCw, Settings } from 'lucide-react';
+import { FileUp, ImageIcon, LogOut, RefreshCw, Settings } from 'lucide-react';
 import clsx from 'clsx';
 import { BottomNav, type Tab } from './components/BottomNav';
 import { MonthSwitcher, Sheet, Toast } from './components/ui';
@@ -11,7 +11,10 @@ import { Budgets } from './screens/Budgets';
 import { Setup } from './screens/Setup';
 import { AnalyticsSkeleton, BudgetsSkeleton, HomeSkeleton, ListSkeleton } from './components/Skeletons';
 import { loadConnection, saveConnection } from './lib/config';
-import { clearCache, useAddExpense, useData, useSetBudget, useSetCategory } from './lib/queries';
+import { clearCache, useAddExpense, useData, useSetBudget, useSetCategory, useSetLogo } from './lib/queries';
+import { LogosContext } from './lib/logoContext';
+import { merchantsWithoutLogo } from './lib/logos';
+import { findLogos } from './lib/api';
 import { countable, monthKey, shiftMonth, type MonthKey } from './lib/stats';
 import { formatUpdated, pluralNew } from './lib/format';
 import type { Connection, Transaction } from './lib/types';
@@ -67,6 +70,8 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
   const setCategory = useSetCategory(conn);
   const setBudget = useSetBudget(conn);
   const addExpense = useAddExpense(conn);
+  const setLogo = useSetLogo(conn);
+  const [findingLogos, setFindingLogos] = useState(false);
 
   const notify = useCallback((t: string) => { setToast(t); setTimeout(() => setToast(null), 2200); }, []);
   const onError = useCallback((e: Error) => notify(`⚠️ ${e.message}`), [notify]);
@@ -118,8 +123,23 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
   const now = monthKey(new Date());
   const minMonth = shiftMonth(now, -12);
 
+  const noLogo = data ? merchantsWithoutLogo(data.transactions, data.logos) : [];
+  const runFindLogos = async () => {
+    setFindingLogos(true);
+    try {
+      const r = await findLogos(conn, noLogo);
+      notify(r.message ?? 'Готово');
+      query.refetch();
+    } catch (e) {
+      notify(`⚠️ ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setFindingLogos(false);
+    }
+  };
+
   return (
-    // Страница всегда чуть выше экрана — даже пока грузятся данные, иначе iOS укоротит окно.
+    <LogosContext.Provider value={data?.logos ?? []}>
+    {/* Страница всегда чуть выше экрана */} — даже пока грузятся данные, иначе iOS укоротит окно.
     <div className="mx-auto max-w-lg" style={{ minHeight: 'calc(100lvh + 1px)' }}>
       <header className={clsx('pt-safe sticky top-0 z-20 bg-bg px-4 pb-2 transition-shadow duration-200',
         scrolled && 'shadow-[0_1px_0_var(--line)]')}>
@@ -200,6 +220,10 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
             onError
           });
         }}
+        onSaveLogo={site => {
+          const t = editing!;
+          setLogo.mutate({ merchant: t.merchant, site }, { onSuccess: () => notify(site ? 'Логотип сохранён' : 'Логотип убран'), onError });
+        }}
       />
       <AddExpenseSheet
         open={adding} categories={data.categories} onClose={() => setAdding(false)}
@@ -226,6 +250,15 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
           className="mb-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-accent py-3.5 font-semibold text-white">
           <FileUp size={18} /> Импорт выписки (PDF)
         </button>
+        {!conn.demo && noLogo.length > 0 && (
+          <>
+            <button onClick={runFindLogos} disabled={findingLogos}
+              className="mb-1 flex w-full items-center justify-center gap-2 rounded-2xl bg-surface-2 py-3.5 font-semibold disabled:opacity-50">
+              <ImageIcon size={18} /> {findingLogos ? 'Claude ищет сайты…' : `Найти логотипы (${noLogo.length} мест)`}
+            </button>
+            <p className="mb-3 text-center text-[12px] text-ink-3">Claude найдёт официальные сайты, иконки подтянутся с них. Разово, до ~40 ¢.</p>
+          </>
+        )}
         <button onClick={onLogout} className="mb-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-surface-2 py-3.5 font-semibold text-critical">
           <LogOut size={18} /> {conn.demo ? 'Подключить свою таблицу' : 'Отключить'}
         </button>
@@ -233,5 +266,6 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
       <ImportSheet open={importing} conn={conn} onClose={() => setImporting(false)} onImported={() => query.refetch()} notify={notify} />
       <Toast text={toast} />
     </div>
+    </LogosContext.Provider>
   );
 }

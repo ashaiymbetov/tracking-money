@@ -76,6 +76,7 @@ function load() {
 }
 
 const res = out => JSON.parse(out.text);
+const plainJson = v => JSON.parse(JSON.stringify(v));   // массивы из VM-контекста → обычные
 
 test('doGet data: токен обязателен, старые строки отсекаются', () => {
   const { ctx } = load();
@@ -212,4 +213,47 @@ test('кэш: большие данные режутся на куски и со
   const second = res(ctx.doGet({ parameter: { action: 'data', token: 'secret' } }));
   assert.equal(second.cached, true);
   assert.equal(second.transactions.length, first.transactions.length);
+});
+
+test('setLogo: сайт нормализуется, повтор обновляет, пустой убирает; логотипы приходят в data', () => {
+  const { ctx, sheets } = load();
+  const post = b => res(ctx.doPost({ postData: { contents: JSON.stringify({ token: 'secret', action: 'setLogo', ...b }) } }));
+  assert.equal(post({ merchant: 'Navat', site: 'https://www.Navat.kg/ru/menu' }).ok, true);
+  assert.deepEqual(plainJson(sheets['Логотипы'].rows.slice(1)), [['navat', 'navat.kg']]);
+  post({ merchant: 'NAVAT', site: 'https://cdn.example.com/navat.png' });
+  assert.deepEqual(plainJson(sheets['Логотипы'].rows.slice(1)), [['navat', 'https://cdn.example.com/navat.png']]);
+  const d = res(ctx.doGet({ parameter: { action: 'data', token: 'secret' } }));
+  assert.deepEqual(d.logos, [['navat', 'https://cdn.example.com/navat.png']]);
+  post({ merchant: 'Navat', site: '' });
+  assert.equal(sheets['Логотипы'].rows.length, 1);
+});
+
+test('findLogos: веб-поиск, pause_turn продолжается, сайты проверяются и сохраняются по ключевому слову', () => {
+  const env = load();
+  const sent = [];
+  const replies = [
+    { stop_reason: 'pause_turn', usage: { input_tokens: 900, output_tokens: 40, server_tool_use: { web_search_requests: 2 } },
+      content: [{ type: 'server_tool_use', id: 's1', name: 'web_search', input: { query: 'Империя пиццы Бишкек' } }] },
+    { stop_reason: 'end_turn', usage: { input_tokens: 1200, output_tokens: 160, server_tool_use: { web_search_requests: 1 } },
+      content: [{ type: 'text', text: 'Вот результат: ' }, { type: 'text', text: JSON.stringify({ items: [
+        { merchant: 'InterSport 1 1000 meloc', keyword: 'intersport', domain: 'intersport.kg' },
+        { merchant: 'Imperiya Pitstsy Oshskiy', keyword: 'imperiya pitstsy', domain: 'https://www.imperiya-pizza.kg/menu' },
+        { merchant: 'KFC - Кант', keyword: 'kfc', domain: 'kfc.kg' },
+        { merchant: 'Непонятная лавка', keyword: 'лавка', domain: null },
+        { merchant: 'Хитрый', keyword: 'хитрый', domain: 'javascript:alert(1)' }
+      ] }) }] }
+  ];
+  env.ctx.PropertiesService = { getScriptProperties: () => ({ getProperty: k => ({ TOKEN: 'secret', ANTHROPIC_API_KEY: 'sk-test' })[k] ?? null }) };
+  env.ctx.UrlFetchApp = { fetch: (url, opt) => { sent.push(JSON.parse(opt.payload)); const r = replies.shift(); return { getResponseCode: () => 200, getContentText: () => JSON.stringify(r) }; } };
+  const r = res(env.ctx.doPost({ postData: { contents: JSON.stringify({ token: 'secret', action: 'findLogos',
+    merchants: ['InterSport 1 1000 meloc', 'Imperiya Pitstsy Oshskiy', 'KFC - Кант', 'Непонятная лавка', 'Хитрый'] }) } }));
+  assert.equal(r.ok, true, r.message);
+  assert.equal(r.found, 3);
+  assert.equal(r.searches, 3);
+  assert.equal(sent.length, 2);                                        // pause_turn → второй запрос
+  assert.equal(sent[0].tools[0].type, 'web_search_20260209');
+  assert.equal(sent[1].messages.at(-1).role, 'assistant');            // продолжение с ответом ассистента
+  assert.deepEqual(plainJson(env.sheets['Логотипы'].rows.slice(1)), [
+    ['intersport', 'intersport.kg'], ['imperiya pitstsy', 'imperiya-pizza.kg'], ['kfc', 'kfc.kg']
+  ]);
 });

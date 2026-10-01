@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { addExpense, fetchData, setBudget, setCategory } from './api';
+import { addExpense, fetchData, setBudget, setCategory, setLogo } from './api';
 import type { AppData, Connection } from './types';
 
 const CACHE_KEY = 'tm.cache';
@@ -74,6 +74,19 @@ export function useSetBudget(c: Connection) {
     (d, v) => {
       if (v.limit > 0) d.budgets[v.category] = v.limit;
       else delete d.budgets[v.category];
+      return d;
+    }
+  );
+}
+
+export function useSetLogo(c: Connection) {
+  return useOptimistic<{ merchant: string; site: string }>(
+    c,
+    v => setLogo(c, v.merchant, v.site),
+    (d, v) => {
+      const pattern = v.merchant.toLowerCase();
+      d.logos = (d.logos ?? []).filter(([k]) => k !== pattern);
+      if (v.site.trim()) d.logos.unshift([pattern, v.site.trim()]);
       return d;
     }
   );

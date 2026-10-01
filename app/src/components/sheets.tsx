@@ -3,26 +3,36 @@ import clsx from 'clsx';
 import { Sheet } from './ui';
 import { CategoryPicker } from './CategoryPicker';
 import { formatMoney } from '../lib/format';
+import { logoSourceFor } from '../lib/logos';
+import { useLogos } from '../lib/logoContext';
+import { MerchantAvatar } from './MerchantAvatar';
 import type { Transaction } from '../lib/types';
 
-export function EditCategorySheet({ tx, categories, onClose, onSave }: {
+export function EditCategorySheet({ tx, categories, onClose, onSave, onSaveLogo }: {
   tx: Transaction | null;
   categories: string[];
   onClose: () => void;
   onSave: (category: string, remember: boolean) => void;
+  onSaveLogo: (site: string) => void;
 }) {
+  const logos = useLogos();
   const [category, setCategory] = useState('');
   const [remember, setRemember] = useState(true);
-  useEffect(() => { if (tx) { setCategory(tx.category); setRemember(true); } }, [tx]);
+  const [site, setSite] = useState('');
+  const currentLogo = tx ? logoSourceFor(tx.merchant, logos) ?? '' : '';
+  useEffect(() => { if (tx) { setCategory(tx.category); setRemember(true); setSite(currentLogo); } }, [tx]); // eslint-disable-line
 
   return (
     <Sheet open={!!tx} onClose={onClose} title="Категория">
       {tx && (
         <>
-          <div className="mb-4 rounded-2xl bg-surface-2 p-3">
-            <div className="text-[15px] font-semibold">{tx.merchant}</div>
-            <div className="tnum text-sm text-ink-2">
-              {formatMoney(tx.amount, tx.currency, true)} · {new Date(tx.date).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}
+          <div className="mb-4 flex items-center gap-3 rounded-2xl bg-surface-2 p-3">
+            <MerchantAvatar merchant={tx.merchant} category={tx.category} size={44} />
+            <div className="min-w-0">
+              <div className="truncate text-[15px] font-semibold">{tx.merchant}</div>
+              <div className="tnum text-sm text-ink-2">
+                {formatMoney(tx.amount, tx.currency, true)} · {new Date(tx.date).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}
+              </div>
             </div>
           </div>
           <CategoryPicker categories={categories} value={category} onChange={setCategory} />
@@ -36,10 +46,28 @@ export function EditCategorySheet({ tx, categories, onClose, onSave }: {
           <button
             disabled={category === tx.category && !remember}
             onClick={() => onSave(category, remember)}
-            className="mt-4 mb-2 w-full rounded-2xl bg-accent py-3.5 text-[16px] font-semibold text-white disabled:opacity-40 active:scale-[0.99] transition"
+            className="mt-4 w-full rounded-2xl bg-accent py-3.5 text-[16px] font-semibold text-white disabled:opacity-40 active:scale-[0.99] transition"
           >
             Сохранить
           </button>
+          <div className="mt-4 mb-2 rounded-2xl bg-surface-2 p-3">
+            <div className="mb-2 text-sm font-medium">Логотип «{tx.merchant}»</div>
+            <div className="flex gap-2">
+              <input
+                value={site} onChange={e => setSite(e.target.value)} placeholder="сайт, например navat.kg"
+                inputMode="url" autoCapitalize="off" autoCorrect="off" spellCheck={false}
+                className="min-w-0 flex-1 rounded-xl bg-surface px-3 py-2.5 outline-none placeholder:text-ink-3"
+              />
+              <button
+                disabled={site.trim() === currentLogo}
+                onClick={() => onSaveLogo(site.trim())}
+                className="shrink-0 rounded-xl bg-accent px-4 font-semibold text-white disabled:opacity-40"
+              >
+                {site.trim() || !currentLogo ? 'OK' : 'Убрать'}
+              </button>
+            </div>
+            <div className="mt-1.5 text-[12px] text-ink-3">Иконка подтянется с сайта для всех операций этого места. Можно вставить и ссылку на картинку.</div>
+          </div>
         </>
       )}
     </Sheet>

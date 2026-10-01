@@ -18,6 +18,8 @@ export interface AppData {
   uncategorized: string;
   categories: string[];
   budgets: Record<string, number>;
+  /** Свои логотипы: [«если в названии есть…», сайт или ссылка на картинку]. */
+  logos?: [string, string][];
   settings: { fareMax: number };
   transactions: Transaction[];
 }
