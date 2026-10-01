@@ -98,6 +98,8 @@ body {
   -webkit-tap-highlight-color: transparent;
   text-rendering: optimizeLegibility;
 }
+/* Включён Face ID и приложение ушло в фон — закрываем экран, чтобы расходов не было видно в переключателе приложений. */
+html.privacy body::after { content: ''; position: fixed; inset: 0; z-index: 200; background: var(--bg); }
 /* Без задержки и двойного тапа-зума на кнопках; долгое нажатие не выделяет текст. */
 button, a, [role="switch"] {
   touch-action: manipulation;

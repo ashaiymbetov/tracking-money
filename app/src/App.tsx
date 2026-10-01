@@ -1,10 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { FileUp, ImageIcon, LogOut, RefreshCw, Settings } from 'lucide-react';
+import { FileUp, ImageIcon, LogOut, RefreshCw, ScanFace, Settings } from 'lucide-react';
 import clsx from 'clsx';
 import { BottomNav, type Tab } from './components/BottomNav';
 import { MonthSwitcher, Sheet, Toast } from './components/ui';
 import { AddExpenseSheet, BudgetSheet, EditCategorySheet } from './components/sheets';
 import { ImportSheet } from './components/ImportSheet';
+import { LockScreen, useAutoLock } from './components/Lock';
 import { Home } from './screens/Home';
 import { Transactions } from './screens/Transactions';
 import { Budgets } from './screens/Budgets';
@@ -15,6 +16,7 @@ import { clearCache, useAddExpense, useData, useSetBudget, useSetCategory, useSe
 import { LogosContext } from './lib/logoContext';
 import { merchantsWithoutLogo } from './lib/logos';
 import { findLogos } from './lib/api';
+import { clearLock, disableLock, enableLock, faceIdAvailable, lockCredential } from './lib/faceid';
 import { countable, monthKey, shiftMonth, type MonthKey } from './lib/stats';
 import { formatUpdated, pluralNew } from './lib/format';
 import type { Connection, Transaction } from './lib/types';
@@ -46,11 +48,30 @@ export default function App() {
   const [conn, setConn] = useState<Connection | null>(() =>
     new URLSearchParams(location.search).has('demo') ? { url: '', token: '', demo: true } : loadConnection());
 
+  const [lockOn, setLockOn] = useState(() => !!lockCredential());
+  const [locked, setLocked] = useState(lockOn);
+  const lock = useCallback(() => setLocked(true), []);
+  useAutoLock(lockOn && !!conn, lock);
+
+  const logout = () => { saveConnection(null); clearCache(); clearLock(); setLockOn(false); setLocked(false); setConn(null); };
   if (!conn) return <Setup onDone={c => { saveConnection(c); setConn(c); }} />;
-  return <Main conn={conn} onLogout={() => { saveConnection(null); clearCache(); setConn(null); }} />;
+  return (
+    <>
+      {/* Под замком приложение уже грузит свежие данные, но недоступно ни для касаний, ни для VoiceOver. */}
+      <div inert={locked}>
+        <Main conn={conn} onLogout={logout} lockOn={lockOn} onLockChange={setLockOn} />
+      </div>
+      {locked && <LockScreen onUnlock={() => setLocked(false)} onReset={logout} />}
+    </>
+  );
 }
 
-function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
+function Main({ conn, onLogout, lockOn, onLockChange }: {
+  conn: Connection;
+  onLogout: () => void;
+  lockOn: boolean;
+  onLockChange: (on: boolean) => void;
+}) {
   const query = useData(conn);
   const data = query.data;
   const [tab, setTab] = useState<Tab>('home');
@@ -122,6 +143,21 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
   useEffect(() => { const id = setInterval(() => tick(n => n + 1), 30_000); return () => clearInterval(id); }, []);
   const now = monthKey(new Date());
   const minMonth = shiftMonth(now, -12);
+
+  const [canFaceId, setCanFaceId] = useState(false);
+  useEffect(() => { faceIdAvailable().then(setCanFaceId); }, []);
+  const [lockBusy, setLockBusy] = useState(false);
+  const toggleLock = async () => {
+    setLockBusy(true);
+    try {
+      if (lockOn) { await disableLock(); onLockChange(false); notify('Face ID выключен'); }
+      else { await enableLock(); onLockChange(true); notify('Face ID включён'); }
+    } catch (e) {
+      notify(`⚠️ ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setLockBusy(false);
+    }
+  };
 
   const noLogo = data ? merchantsWithoutLogo(data.transactions, data.logos) : [];
   const runFindLogos = async () => {
@@ -257,6 +293,19 @@ function Main({ conn, onLogout }: { conn: Connection; onLogout: () => void }) {
               <ImageIcon size={18} /> {findingLogos ? 'Claude ищет сайты…' : `Найти логотипы (${noLogo.length} мест)`}
             </button>
             <p className="mb-3 text-center text-[12px] text-ink-3">Claude найдёт официальные сайты, иконки подтянутся с них. Разово, до ~40 ¢.</p>
+          </>
+        )}
+        {(canFaceId || lockOn) && (
+          <>
+            <button onClick={toggleLock} disabled={lockBusy} role="switch" aria-checked={lockOn}
+              className="mb-1 flex w-full items-center gap-3 rounded-2xl bg-surface-2 px-4 py-3 text-left disabled:opacity-60">
+              <ScanFace size={20} className="shrink-0 text-accent" />
+              <span className="flex-1 font-semibold">Вход по Face ID</span>
+              <span className={clsx('relative h-[31px] w-[51px] shrink-0 rounded-full transition-colors duration-200', lockOn ? 'bg-good' : 'bg-ink-3/40')}>
+                <span className={clsx('absolute top-[2px] left-[2px] h-[27px] w-[27px] rounded-full bg-white shadow transition-transform duration-200', lockOn && 'translate-x-5')} />
+              </span>
+            </button>
+            <p className="mb-3 text-center text-[12px] text-ink-3">Спрашивает Face ID при открытии и если приложение было свёрнуто дольше минуты.</p>
           </>
         )}
         <button onClick={onLogout} className="mb-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-surface-2 py-3.5 font-semibold text-critical">
