@@ -116,6 +116,41 @@ function loadWithClaude(reply) {
   return { ...env, sent };
 }
 
+test('скрин истории операций: дописываются только пропущенные', () => {
+  const now = new Date();
+  const hhmm = d => new Date(d.getTime() + 6 * 3600e3).toISOString().slice(0, 16);   // время Бишкека
+  const day = d => hhmm(d).slice(0, 10);
+  const yesterday = new Date(now.getTime() - 24 * 3600e3);
+  const item = (o) => ({ kind: 'payment', method: 'card', recipient: 'business', currency: 'KGS', bank: 'MBank', category: 'Без категории', date: '', merchant: '', amount: 0, ...o });
+  const list = [
+    item({ amount: 160, merchant: 'Аптека Эльбрус', date: hhmm(now) }),          // уже есть (Apple Pay, другое название)
+    item({ amount: 540, merchant: 'Глобус', date: hhmm(now), category: 'Продукты' }), // пропущена
+    item({ amount: 45, merchant: 'Алтынбек А.', kind: 'transfer_out', recipient: 'person', date: day(now) }), // есть, только день
+    item({ amount: 45, merchant: 'Алтынбек А.', kind: 'transfer_out', recipient: 'person', date: day(now) }), // второй такой же — новый
+    item({ amount: 1000, merchant: 'Зарплата', kind: 'income', date: day(yesterday) })  // поступление — пропуск
+  ];
+  const reply = { stop_reason: 'end_turn', usage: { input_tokens: 900, output_tokens: 300 }, content: [{ type: 'text', text: JSON.stringify({ transactions: list }) }] };
+  const { ctx, sheets, sent } = loadWithClaude(reply);
+  const before = sheets['Транзакции'].rows.length;
+  const r = res(ctx.doPost({ postData: { contents: JSON.stringify({ token: 'secret', text: 'История операций\nГлобус -540 с\n…', source: 'screenshot' }) } }));
+  assert.equal(r.ok, true, r.message);
+  assert.equal(r.added, 2);
+  assert.equal(r.duplicates, 2);
+  assert.match(r.message, /Дописал 2 на 585/);
+  assert.ok(sent[0].messages[0].content[0].text.includes('Today in Bishkek is ' + day(now)));
+  const added = sheets['Транзакции'].rows.slice(before);
+  assert.deepEqual(added.map(x => [x[1], x[3], x[4]]).sort((a, b) => a[0] - b[0]),
+    [[45, 'Алтынбек А.', 'Транспорт'], [540, 'Глобус', 'Продукты']]);
+  const raws = added.map(x => JSON.parse(x[7]));
+  assert.equal(raws.filter(x => x.ai_tokens).length, 1);     // токены за скрин — один раз
+
+  // Тот же скрин ещё раз — ничего не добавится.
+  const again = res(ctx.doPost({ postData: { contents: JSON.stringify({ token: 'secret', text: 'История операций\nГлобус -540 с', source: 'screenshot' }) } }));
+  assert.equal(again.added, 0);
+  assert.match(again.message, /Всё уже записано/);
+  assert.equal(sheets['Транзакции'].rows.length, before + 2);
+});
+
 test('текст скрина (OCR на iPhone) → Claude получает только текст, расход токенов пишется', () => {
   const reply = {
     stop_reason: 'end_turn', usage: { input_tokens: 612, output_tokens: 95 },

@@ -105,8 +105,11 @@ test('detectMediaType', () => {
 });
 
 test('EXTRACTION_SCHEMA: все поля обязательны (требование structured outputs)', () => {
-  assert.deepEqual([...EXTRACTION_SCHEMA.required].sort(), Object.keys(EXTRACTION_SCHEMA.properties).sort());
-  assert.equal(EXTRACTION_SCHEMA.additionalProperties, false);
+  const item = EXTRACTION_SCHEMA.properties.transactions.items;
+  for (const schema of [EXTRACTION_SCHEMA, item]) {
+    assert.deepEqual([...schema.required].sort(), Object.keys(schema.properties).sort());
+    assert.equal(schema.additionalProperties, false);
+  }
 });
 
 test('categorize: Tulpar-Card (оплата в автобусе)', () => {

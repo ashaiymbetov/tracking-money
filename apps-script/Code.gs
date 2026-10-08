@@ -9,7 +9,7 @@
  *   4. В iPhone настрой автоматизацию «Транзакция», которая шлёт POST на этот URL.
  */
 
-var SCRIPT_VERSION = '2026-10-01-logos';  // видно по GET-запросу на URL скрипта — так проверяем, что развёрнута свежая версия
+var SCRIPT_VERSION = '2026-10-08-history';  // видно по GET-запросу на URL скрипта — так проверяем, что развёрнута свежая версия
 var SHEET_TX = 'Транзакции';
 var SHEET_RULES = 'Правила';
 var SHEET_SUMMARY = 'Сводка';
@@ -100,12 +100,18 @@ function doPost(e) {
       var ai = body.image
         ? extractFromImage_(body.image, body.mime, loadCategories_(ss))
         : extractFromText_(body.text, loadCategories_(ss));
-      var decision = interpretExtraction(ai.data, loadSettings_(ss).fareMax);
-      if (!decision.record) return json_({ ok: true, skipped: true, message: decision.message });
       var aiInput = body.image ? 'image' : 'text';
-      body = mergeExtraction_(body, decision.tx);
-      body.ai_input = aiInput;          // что ушло в Claude — картинка или текст
-      body.ai_tokens = ai.usage;        // реальный расход: { in, out } токенов — видно в «Исходных данных»
+      var items = extractedItems_(ai.data);
+      if (items.length > 1) {
+        // Скрин истории операций: дальше, под блокировкой, запишем только те, которых ещё нет в таблице.
+        body = { action: 'extractedList', items: items, card: body.card, source: body.source, ai_input: aiInput, ai_tokens: ai.usage };
+      } else {
+        var decision = interpretExtraction(items[0], loadSettings_(ss).fareMax);
+        if (!decision.record) return json_({ ok: true, skipped: true, message: decision.message });
+        body = mergeExtraction_(body, decision.tx);
+        body.ai_input = aiInput;          // что ушло в Claude — картинка или текст
+        body.ai_tokens = ai.usage;        // реальный расход: { in, out } токенов — видно в «Исходных данных»
+      }
     }
 
     var lock = LockService.getScriptLock();
@@ -114,6 +120,7 @@ function doPost(e) {
       var result = body.action === 'setCategory' ? setCategory_(body)
         : body.action === 'setBudget' ? setBudget_(body)
         : body.action === 'import' ? importRows_(body)
+        : body.action === 'extractedList' ? importExtracted_(body)
         : body.action === 'setLogo' ? setLogo_(body)
         : body.action === 'findLogos' ? findLogos_(body)
         : body.action === 'categorizeUnknown' ? categorizeUnknown_()
@@ -296,15 +303,7 @@ function importRows_(body) {
   var rules = loadRules_(ss);
   var fareMax = loadSettings_(ss).fareMax;
 
-  var existing = {};
-  var last = sheet.getLastRow();
-  if (last >= 2) {
-    sheet.getRange(2, 1, last - 1, 2).getValues().forEach(function (r) {
-      if (!isDate_(r[0]) || isNaN(Number(r[1]))) return;
-      var key = Number(r[1]).toFixed(2);
-      (existing[key] = existing[key] || []).push(r[0].getTime());
-    });
-  }
+  var existing = existingByAmount_(sheet);
 
   var out = [];
   var duplicates = 0;
@@ -313,12 +312,7 @@ function importRows_(body) {
     var amount = Math.abs(Number(r.amount));
     var date = new Date(r.date);
     if (!(amount > 0) || isNaN(date.getTime())) return;
-    var times = existing[amount.toFixed(2)];
-    if (times) {
-      for (var i = 0; i < times.length; i++) {
-        if (Math.abs(times[i] - date.getTime()) <= IMPORT_DUP_WINDOW_MS) { times.splice(i, 1); duplicates++; return; }
-      }
-    }
+    if (takeDuplicate_(existing, amount, date, false)) { duplicates++; return; }
     var merchant = normalizeMerchant(r.merchant);
     var category = cleanText(r.category) || categorize(merchant, rules);
     if (category === UNCATEGORIZED && isFare('payment', r.recipient || '', amount, fareMax)) category = TRANSPORT;
@@ -331,6 +325,82 @@ function importRows_(body) {
   return {
     ok: true, added: out.length, duplicates: duplicates, uncategorized: uncategorized,
     message: 'Добавлено ' + out.length + ', уже было ' + duplicates + (uncategorized ? ', без категории ' + uncategorized : '')
+  };
+}
+
+/** Все записанные операции: сумма → список времён (мс). */
+function existingByAmount_(sheet) {
+  var existing = {};
+  var last = sheet.getLastRow();
+  if (last < 2) return existing;
+  sheet.getRange(2, 1, last - 1, 2).getValues().forEach(function (r) {
+    if (!isDate_(r[0]) || isNaN(Number(r[1]))) return;
+    var key = Number(r[1]).toFixed(2);
+    (existing[key] = existing[key] || []).push(r[0].getTime());
+  });
+  return existing;
+}
+
+/** Бишкек круглый год UTC+6 — день считаем без календарных библиотек. */
+function bishkekDay_(ms) {
+  return new Date(ms + 6 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+/**
+ * Есть ли уже такая операция: та же сумма в пределах 15 минут, а если известен только день — в тот же день.
+ * Найденная запись «гасится», чтобы две одинаковые покупки (например, два проезда) не слились в одну.
+ */
+function takeDuplicate_(existing, amount, date, dayOnly) {
+  var times = existing[Number(amount).toFixed(2)];
+  if (!times) return false;
+  for (var i = 0; i < times.length; i++) {
+    var same = dayOnly ? bishkekDay_(times[i]) === bishkekDay_(date.getTime())
+      : Math.abs(times[i] - date.getTime()) <= IMPORT_DUP_WINDOW_MS;
+    if (same) { times.splice(i, 1); return true; }
+  }
+  return false;
+}
+
+/**
+ * Скрин истории операций (MBank, O!Bank…) → записываем только пропущенные: те, что не поймал Apple Pay
+ * или не отправили скрином. Поступления и переводы себе пропускаются, как и для одиночного чека.
+ */
+function importExtracted_(body) {
+  var items = Array.isArray(body.items) ? body.items.slice(0, 200) : [];
+  var ss = getSpreadsheet_();
+  var sheet = ss.getSheetByName(SHEET_TX);
+  var rules = loadRules_(ss);
+  var fareMax = loadSettings_(ss).fareMax;
+  var existing = existingByAmount_(sheet);
+
+  var out = [];
+  var total = 0;
+  var duplicates = 0;
+  var skipped = 0;
+  items.forEach(function (x) {
+    var d = interpretExtraction(x, fareMax);
+    if (!d.record) { skipped++; return; }
+    var tx = d.tx;
+    var iso = withBishkekOffset(tx.date);
+    var dayOnly = !/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(tx.date);
+    var date = iso ? new Date(iso) : new Date();
+    if (takeDuplicate_(existing, tx.amount, date, dayOnly)) { duplicates++; return; }
+    var merchant = normalizeMerchant(tx.merchant);
+    var category = categorize(merchant, rules);
+    if (category === UNCATEGORIZED && tx.suggested_category) category = tx.suggested_category;
+    var raw = { from: 'list', kind: tx.kind, method: tx.method, recipient: tx.recipient, bank: tx.bank, ai_input: body.ai_input };
+    if (!out.length && body.ai_tokens) raw.ai_tokens = body.ai_tokens;   // токены — за весь скрин, пишем один раз
+    out.push([date, tx.amount, tx.currency, merchant, category, cleanText(body.card) || tx.bank, cleanText(body.source) || 'screenshot', JSON.stringify(raw)]);
+    if (tx.currency === DEFAULT_CURRENCY) total += tx.amount;
+  });
+  out.sort(function (a, b) { return a[0] - b[0]; });
+  if (out.length) sheet.getRange(sheet.getLastRow() + 1, 1, out.length, out[0].length).setValues(out);
+
+  var tail = (duplicates ? ', уже было ' + duplicates : '') + (skipped ? ', пропущено ' + skipped + ' (поступления и т. п.)' : '');
+  if (!out.length) return { ok: true, skipped: true, added: 0, duplicates: duplicates, message: '✓ Всё уже записано' + tail };
+  return {
+    ok: true, added: out.length, duplicates: duplicates,
+    message: 'Дописал ' + out.length + ' на ' + formatAmount_(total) + ' ' + DEFAULT_CURRENCY + tail
   };
 }
 
@@ -635,7 +705,7 @@ var TX_KINDS = ['payment', 'transfer_out', 'income', 'transfer_in', 'own_transfe
 var TX_METHODS = ['qr', 'phone_transfer', 'card', 'other'];
 var RECIPIENTS = ['business', 'person', 'self', 'unknown'];
 
-var EXTRACTION_SCHEMA = {
+var TX_ITEM_SCHEMA = {
   type: 'object',
   properties: {
     kind: { type: 'string', enum: TX_KINDS },
@@ -652,15 +722,31 @@ var EXTRACTION_SCHEMA = {
   additionalProperties: false
 };
 
+/** Чек — одна операция; скрин истории в банке — несколько (тогда записываем только те, которых ещё нет). */
+var EXTRACTION_SCHEMA = {
+  type: 'object',
+  properties: { transactions: { type: 'array', items: TX_ITEM_SCHEMA } },
+  required: ['transactions'],
+  additionalProperties: false
+};
+
+/** Ответ Claude → список операций (старый формат с одной операцией тоже понимаем). */
+function extractedItems_(data) {
+  if (data && Array.isArray(data.transactions)) return data.transactions;
+  return data && data.kind ? [data] : [];
+}
+
 /**
  * Инструкция для Claude. На английском — так она занимает в несколько раз меньше токенов, чем на русском;
  * значения (магазин, категория) Claude возвращает как в чеке и из списка категорий.
  */
 function extractionPrompt_(categories, source) {
   return [
-    'Extract ONE transaction from this ' + (source === 'text'
-      ? 'text, read by OCR from a screenshot of a Kyrgyz banking app (MBank, O!Bank/O!Dengi, Simbank…). OCR may break lines or misread symbols.'
+    'Extract the transactions from this ' + (source === 'text'
+      ? 'text, read by OCR from a screenshot of a Kyrgyz banking app (MBank, O!Bank/O!Dengi, Simbank…). OCR may break lines, misread symbols or split a list row into columns.'
       : 'screenshot/receipt of a Kyrgyz banking app (MBank, O!Bank/O!Dengi, Simbank…).'),
+    'A receipt or a single operation = ONE item. A history/list of operations = one item per row, every completed row visible (also income — mark its kind); skip rows cut off so the amount is not visible. Nothing found = empty array.',
+    'In lists «-540 с» is money spent, «+540 с» is received.',
     'kind: payment (purchase/service, incl. QR) | transfer_out (to another person) | income | transfer_in | own_transfer (between own accounts) | not_a_transaction (no completed operation: error, balance, ad).',
     'method: qr (QR/ELQR mentioned) | phone_transfer (by phone or card number) | card | other.',
     'recipient: business (shop, company, named ИП) | person (private individual, e.g. «Алтынбек А.») | self | unknown.',
@@ -668,7 +754,8 @@ function extractionPrompt_(categories, source) {
     'merchant: the actual shop/ИП/service or person that received the money — usually under «Purpose of the payment»/«Назначение платежа»/«Получатель». ' +
       'NEVER use payment processors or stamps: O!Dengi, O!Деньги, Green Telecom Service, XPAY, ELQR, MBank, Simbank, Visa, «PAID». ' +
       'Write it as in the receipt without service prefixes (MPEmgekLyuks → Emgek Lyuks, MD00APTEKA → APTEKA), no phone/account numbers.',
-    'date: YYYY-MM-DDTHH:MM (Bishkek time) or "" if not shown. bank: bank/app name or "".',
+    'date: YYYY-MM-DDTHH:MM (Bishkek time); YYYY-MM-DD if only the day is shown (list section headers like «Сегодня», «Вчера», «5 октября» give the day of the rows below); "" if not shown. ' +
+      'Today in Bishkek is ' + bishkekDay_(Date.now()) + '. bank: bank/app name or "".',
     'category: one of [' + categories.join(', ') + '], else «' + UNCATEGORIZED + '». Choose by what the merchant sells, not by the payment processor. ' +
       '«Коммуналка» = electricity, water, gas, heating, garbage, housing fees; «Дом» = goods for the home; «Связь» = mobile/internet top-ups only.'
   ].join('\n');
