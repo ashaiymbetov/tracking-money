@@ -1,7 +1,10 @@
+import { isMbank, parseMbankPages, summarizeMbank } from './mbank';
+
 /**
  * Разбор PDF-выписки прямо на телефоне (файл никуда не отправляется).
+ * Поддержаны Simbank «Выписка по карте» и MBank «Выписка по счёту» (разбор MBank — в mbank.ts).
  *
- * Сейчас поддержана выписка Simbank «ВЫПИСКА ПО КАРТЕ»: колонки «Дата | Детали операции | Сумма |
+ * Выписка Simbank «ВЫПИСКА ПО КАРТЕ»: колонки «Дата | Детали операции | Сумма |
  * Плата за кредит | Баланс после операции». Длинные «Детали» переносятся на несколько строк — иногда
  * выше даты, — поэтому строки собираем не построчно, а по координатам: каждая сумма — это одна операция,
  * а куски деталей относим к ближайшей по высоте сумме.
@@ -29,13 +32,19 @@ export interface StatementExpense {
   category?: string;
 }
 
+/** Списания, которые не расходы и не импортируются: переводы себе, обмен валюты, снятие наличных. */
+export interface ExcludedGroup { label: string; count: number; amount: number }
+
 export interface ParsedStatement {
   bank: string;
   period: string;
   rows: StatementRow[];
   expenses: StatementExpense[];
   income: StatementRow[];
-  /** Итог расходов из шапки выписки — для сверки с тем, что мы насчитали. */
+  excluded: ExcludedGroup[];
+  /** Сумма всех списаний по выписке (расходы + не импортируемые). */
+  debits: number;
+  /** Итог списаний из самой выписки — для сверки с тем, что мы насчитали. */
   declaredSpent: number | null;
 }
 
@@ -171,8 +180,18 @@ export function summarizeStatement(parsed: { rows: StatementRow[]; period: strin
     rows: parsed.rows,
     expenses,
     income: parsed.rows.filter(r => r.amount > 0),
+    excluded: [],
+    debits: parsed.rows.reduce((s, r) => s + (r.amount < 0 ? -r.amount : 0), 0),
     declaredSpent: parsed.declaredSpent
   };
+}
+
+/** Узнаёт банк по тексту выписки и разбирает её. */
+export function parseStatement(pages: PdfPage[]): ParsedStatement {
+  const text = pages.flat().map(i => i.str).join('\n');
+  if (isMbank(text)) return summarizeMbank(parseMbankPages(pages));
+  if (/ВЫПИСКА ПО КАРТЕ/.test(text) && /Детали операции/.test(text)) return summarizeStatement(parseSimbankPages(pages));
+  throw new StatementError('Не узнал выписку. Поддерживаются «Выписка по карте» Simbank и «Выписка по счёту» MBank (PDF из приложения банка).');
 }
 
 /** Читает PDF в браузере (pdf.js грузится только здесь — отдельным чанком). */

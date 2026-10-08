@@ -192,18 +192,19 @@ test('import: дубли с Apple Pay отсекаются, категории �
     { date: '2026-09-28T13:09:40+06:00', amount: 102, merchant: 'Globus', method: 'card', recipient: 'business' },   // вторая такая же покупка — не дубль
     { date: '2026-09-28T18:00:00+06:00', amount: 45, merchant: 'Асан Б.', method: 'qr', recipient: 'person' },        // маршрутка
     { date: '2026-09-28T19:00:00+06:00', amount: 210, merchant: 'Комиссия Simbank', method: 'other', recipient: 'business', category: 'Кредит и комиссии' },
-    { date: '2026-09-28T20:00:00+06:00', amount: 999, merchant: 'Непонятное место', method: 'card', recipient: 'business' }
+    { date: '2026-09-28T20:00:00+06:00', amount: 999, merchant: 'Непонятное место', method: 'card', recipient: 'business' },
+    { date: '2026-09-28T21:00:00+06:00', amount: 9800, merchant: 'Айдар Ш.', method: 'other', recipient: 'person' }   // перевод человеку
   ];
   const r1 = post({ action: 'import', bank: 'Simbank', card: 'Simbank', rows });
   assert.equal(r1.ok, true);
-  assert.equal(r1.added, 4);
+  assert.equal(r1.added, 5);
   assert.equal(r1.duplicates, 1);
   assert.equal(r1.uncategorized, 1);                     // только «Непонятное место»: Globus есть в правилах
-  const added = tx.slice(-4);
-  assert.deepEqual(added.map(r => r[4]), ['Продукты', 'Транспорт', 'Кредит и комиссии', 'Без категории']);
+  const added = tx.slice(-5);
+  assert.deepEqual(added.map(r => r[4]), ['Продукты', 'Транспорт', 'Кредит и комиссии', 'Без категории', 'Переводы']);
   const r2 = post({ action: 'import', bank: 'Simbank', card: 'Simbank', rows });
   assert.equal(r2.added, 0);
-  assert.equal(r2.duplicates, 5);
+  assert.equal(r2.duplicates, 6);
 });
 
 test('categorizeUnknown: один запрос к Claude, категории проставлены и запомнены правилами', () => {

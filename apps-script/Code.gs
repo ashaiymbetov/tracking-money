@@ -9,7 +9,7 @@
  *   4. В iPhone настрой автоматизацию «Транзакция», которая шлёт POST на этот URL.
  */
 
-var SCRIPT_VERSION = '2026-10-08-history';  // видно по GET-запросу на URL скрипта — так проверяем, что развёрнута свежая версия
+var SCRIPT_VERSION = '2026-10-08-mbank';  // видно по GET-запросу на URL скрипта — так проверяем, что развёрнута свежая версия
 var SHEET_TX = 'Транзакции';
 var SHEET_RULES = 'Правила';
 var SHEET_SUMMARY = 'Сводка';
@@ -316,6 +316,8 @@ function importRows_(body) {
     var merchant = normalizeMerchant(r.merchant);
     var category = cleanText(r.category) || categorize(merchant, rules);
     if (category === UNCATEGORIZED && isFare('payment', r.recipient || '', amount, fareMax)) category = TRANSPORT;
+    // Перевод человеку, которого нет в правилах (родных можно отправить в «Не учитывать» правилом).
+    if (category === UNCATEGORIZED && r.recipient === 'person') category = 'Переводы';
     if (category === UNCATEGORIZED) uncategorized++;
     out.push([date, amount, DEFAULT_CURRENCY, merchant, category, cleanText(body.card), 'statement',
       JSON.stringify({ bank: cleanText(body.bank), method: r.method || '', recipient: r.recipient || '' })]);

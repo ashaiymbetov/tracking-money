@@ -32,8 +32,8 @@ export function ImportSheet({ open, conn, onClose, onImported, notify }: {
     setStage({ kind: 'reading', name: file.name });
     try {
       // pdf.js и парсер — отдельный чанк, грузится только когда импортируют выписку
-      const { readPdfPages, parseSimbankPages, summarizeStatement } = await import('../lib/statement');
-      const st = summarizeStatement(parseSimbankPages(await readPdfPages(file)));
+      const { readPdfPages, parseStatement } = await import('../lib/statement');
+      const st = parseStatement(await readPdfPages(file));
       if (!st.expenses.length) throw new Error('В выписке не нашлось расходов');
       setStage({ kind: 'preview', st });
     } catch (e) {
@@ -76,7 +76,7 @@ export function ImportSheet({ open, conn, onClose, onImported, notify }: {
             Выбери PDF-выписку. Она разбирается <b className="text-ink">прямо на телефоне</b> — файл никуда не отправляется,
             Claude не нужен, это бесплатно. Операции, которые уже есть (Apple Pay, скрины), пропустятся.
           </p>
-          <p className="mb-4 rounded-2xl bg-surface-2 p-3 text-[13px] text-ink-3">Пока поддерживается «Выписка по карте» Simbank.</p>
+          <p className="mb-4 rounded-2xl bg-surface-2 p-3 text-[13px] text-ink-3">Поддерживаются «Выписка по карте» Simbank и «Выписка по счёту» MBank.</p>
           <label className={btn + ' flex cursor-pointer items-center justify-center gap-2'}>
             <FileText size={18} /> Выбрать PDF
             <input type="file" accept="application/pdf,.pdf" className="hidden"
@@ -120,7 +120,8 @@ export function ImportSheet({ open, conn, onClose, onImported, notify }: {
 
 function Preview({ st, busy, btn, onImport }: { st: ParsedStatement; busy: boolean; btn: string; onImport: (st: ParsedStatement) => void }) {
   const total = st.expenses.reduce((s, e) => s + e.amount, 0);
-  const matches = st.declaredSpent !== null && Math.abs(total - st.declaredSpent) < 0.01;
+  // Сверяем все списания (расходы + переводы себе, наличные) с итогом в самой выписке.
+  const matches = st.declaredSpent !== null && Math.abs(st.debits - st.declaredSpent) < 0.01;
   const recent = [...st.expenses].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
   return (
     <div className="pb-2">
@@ -128,9 +129,13 @@ function Preview({ st, busy, btn, onImport }: { st: ParsedStatement; busy: boole
         <div className="text-[13px] text-ink-3">{st.bank} · {st.period}</div>
         <div className="tnum mt-1 text-[26px] font-semibold">{formatMoney(total, 'KGS', true)}</div>
         <div className="text-sm text-ink-2">{st.expenses.length} расходов · {st.income.length} поступлений (их не импортируем)</div>
+        {st.excluded.map(g => (
+          <div key={g.label} className="tnum text-sm text-ink-3">{g.label}: {g.count} на {formatMoney(g.amount, 'KGS', true)} — не расход, пропускаем</div>
+        ))}
         {st.declaredSpent !== null && (
           <div className={'mt-2 text-[13px] ' + (matches ? 'text-good' : 'text-warning')}>
-            {matches ? '✓ Сходится с итогом в выписке' : `⚠️ В выписке указано ${formatMoney(st.declaredSpent, 'KGS', true)}`}
+            {matches ? '✓ Все списания сходятся с итогом в выписке'
+              : `⚠️ Списаний в выписке ${formatMoney(st.declaredSpent, 'KGS', true)}, нашёл ${formatMoney(st.debits, 'KGS', true)}`}
           </div>
         )}
       </div>
